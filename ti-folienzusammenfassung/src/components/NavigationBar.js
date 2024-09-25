@@ -4,6 +4,7 @@ import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
+import { Link } from 'react-router-dom';
 
 const NavigationBar = () => {
   return (
@@ -30,6 +31,8 @@ const NavigationBar = () => {
 
         {/* Navigation Links */}
         <Button
+          component={Link}
+          to="/"
           sx={{
             color: '#121C2C', // Same dark blue color for buttons
             textTransform: 'none', // Keep text case as in original
@@ -39,6 +42,8 @@ const NavigationBar = () => {
           Home
         </Button>
         <Button
+          component={Link}
+          to="/services"
           sx={{
             color: '#121C2C',
             textTransform: 'none',
@@ -48,6 +53,8 @@ const NavigationBar = () => {
           Services
         </Button>
         <Button
+          component={Link}
+          to="/kontakt"
           sx={{
             color: '#121C2C',
             textTransform: 'none',
