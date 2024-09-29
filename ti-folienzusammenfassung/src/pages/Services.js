@@ -24,13 +24,31 @@ const Services = () => {
     setLanguage(e.target.value);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!file) {
-      alert('Bitte laden Sie eine Datei hoch, bevor Sie die Zusammenfassung erstellen.');
+      alert('Bitte laden Sie eine Datei hoch.');
       return;
     }
-    // Hier kannst du die Logik hinzufügen, um die Datei zu verarbeiten und die Zusammenfassung zu erstellen.
-    alert('Zusammenfassung wird erstellt...');
+  
+    const formData = new FormData();
+    formData.append('file', file);
+  
+    try {
+      const response = await fetch('http://127.0.0.1:8000/uploadfile/', {
+        method: 'POST',
+        body: formData,
+      });
+  
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Erfolgreich hochgeladen:', data.message);
+      } else {
+        const errorData = await response.json();
+        alert('Fehler beim Hochladen: ' + errorData.detail);
+      }
+    } catch (error) {
+      console.error('Fehler:', error);
+    }
   };
 
   return (
