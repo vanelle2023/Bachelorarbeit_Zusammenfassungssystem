@@ -2,7 +2,7 @@ Anleitung zum Starten des Backend-Projekts:
 
 Voraussetzungen:
 1. Stellen Sie sicher, dass Python (Version 3.7 oder höher) und pip installiert sind.
-2. pip und python sollten in den Umgebungsvariablen Ihres Systems hinterlegt sein, damit sie von überall aufgerufen werden können.
+2. python sollte in den Umgebungsvariablen Ihres Systems hinterlegt sein, damit sie von überall aufgerufen werden können.
 
 Navigieren Sie zu dem Verzeichnis, in dem Ihr Backend-Projekt gespeichert ist. Zum Beispiel:
 cd D:\backend
@@ -16,7 +16,8 @@ backend/
 Benötigte Pakete installieren:
 Führen Sie folgende Befehle aus, um die erforderlichen Pakete zu installieren
 pip install uvicorn
-pip install python-multipart PyMuPDF pptx
+pip install python-multipart PyMuPDF 
+pip install python-pptx
 pip install fastapi[all]
 pip install git+https://github.com/openai/CLIP.git
 pip install transformers torch torchvision
