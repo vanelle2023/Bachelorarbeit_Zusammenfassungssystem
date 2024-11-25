@@ -3,7 +3,8 @@ import { Box, Button, Typography, TextField, FormControl, CircularProgress } fro
 
 const Services = () => {
   const [file, setFile] = useState(null);
-  const [slideNumber, setSlideNumber] = useState(0);
+  const [startSlide, setStartSlide] = useState(0);
+  const [maxSlides, setMaxSlides] = useState(3);
   const [loading, setLoading] = useState(false);
   const [summaryResult, setSummaryResult] = useState(null);
   const [error, setError] = useState(null);
@@ -34,13 +35,13 @@ const Services = () => {
     }
   };
 
-  const handleSlideNumberChange = (e) => {
-    const value = parseInt(e.target.value);
-    if (!isNaN(value) && value >= 0 && (!totalSlides || value < totalSlides)) {
-      setSlideNumber(value);
+  const handleSlideInputChange = (setter) => (e) => {
+    const value = parseInt(e.target.value, 10);
+    if (!isNaN(value) && value >= 0 && (!totalSlides || value <= totalSlides)) {
+      setter(value);
       setError(null);
     } else {
-      setError(`Bitte geben Sie eine gültige Foliennummer zwischen 0 und ${totalSlides - 1} ein.`);
+      setError('Ungültige Eingabe für Foliennummer.');
     }
   };
 
@@ -56,7 +57,8 @@ const Services = () => {
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('slide_number', slideNumber.toString());
+    formData.append('start_slide', startSlide.toString());
+    formData.append('max_slides', maxSlides.toString());
 
     try {
       const response = await fetch('http://127.0.0.1:8000/uploadfile/', {
@@ -70,13 +72,7 @@ const Services = () => {
       }
 
       const data = await response.json();
-      
-      setSummaryResult({
-        originalText: data.result.original_text,
-        summary: data.result.summary,
-        imagePath: data.result.image_path,
-        currentSlide: slideNumber
-      });
+      setSummaryResult(data);
     } catch (error) {
       setError(error.message);
     } finally {
@@ -88,7 +84,7 @@ const Services = () => {
     <>
       <Box sx={{ padding: '2rem' }}>
         <Typography variant="h5" gutterBottom>
-          Fassen Sie Vorlesungsfolien im Handumdrehen zusammen.
+          Fassen Sie mehrere Vorlesungsfolien zusammen.
         </Typography>
       </Box>
       <Box sx={{ padding: '2rem', display: 'flex', justifyContent: 'space-between' }}>
@@ -108,25 +104,26 @@ const Services = () => {
             />
           </FormControl>
 
-          {/* Foliennummer mit Validierung */}
+          {/* Startfolie */}
           <FormControl fullWidth sx={{ mb: 3 }}>
             <TextField
-              label="Foliennummer"
+              label="Startfolie"
               type="number"
-              value={slideNumber}
-              onChange={handleSlideNumberChange}
-              error={!!error && error.includes('Foliennummer')}
-              helperText={
-                error && error.includes('Foliennummer')
-                  ? error
-                  : totalSlides
-                  ? `Verfügbare Folien: 0-${totalSlides - 1}`
-                  : ''
-              }
-              inputProps={{ 
-                min: 0,
-                max: totalSlides > 0 ? totalSlides - 1 : undefined
-              }}
+              value={startSlide}
+              onChange={handleSlideInputChange(setStartSlide)}
+              error={!!error && error.includes('Startfolie')}
+              helperText={totalSlides ? `Verfügbare Folien: 0-${totalSlides - 1}` : ''}
+            />
+          </FormControl>
+
+          {/* Anzahl der Folien */}
+          <FormControl fullWidth sx={{ mb: 3 }}>
+            <TextField
+              label="Anzahl der Folien"
+              type="number"
+              value={maxSlides}
+              onChange={handleSlideInputChange(setMaxSlides)}
+              error={!!error && error.includes('Anzahl')}
             />
           </FormControl>
 
@@ -147,12 +144,12 @@ const Services = () => {
                 },
                 '&:disabled': {
                   bgcolor: 'rgba(0, 0, 0, 0.12)',
-                }
+                },
               }}
               onClick={handleSubmit}
-              disabled={loading || !file || (error && error.includes('Foliennummer'))}
+              disabled={loading || !file}
             >
-              {loading ? <CircularProgress size={24} color="inherit" /> : 'Jetzt zusammenfassen'}
+              {loading ? <CircularProgress size={24} color="inherit" /> : 'Zusammenfassen'}
             </Button>
           </Box>
         </Box>
@@ -167,121 +164,43 @@ const Services = () => {
             backgroundColor: '#f9f9f9',
           }}
         >
-          <Typography variant="h6" gutterBottom sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Zusammenfassungsergebnis</span>
-            {summaryResult && (
-              <Typography variant="body2" component="span" sx={{ color: 'text.secondary' }}>
-                Folie {summaryResult.currentSlide}
-                {totalSlides > 0 && ` von ${totalSlides - 1}`}
-              </Typography>
-            )}
+          <Typography variant="h6" gutterBottom>
+            Zusammenfassungsergebnis
           </Typography>
 
-          <Box 
-            sx={{ 
-              height: '600px', 
-              overflowY: 'auto', 
-              padding: '1rem', 
+          <Box
+            sx={{
+              height: '600px',
+              overflowY: 'auto',
+              padding: '1rem',
               border: '1px solid #ddd',
               borderRadius: '4px',
               backgroundColor: 'white',
             }}
           >
             {loading && (
-              <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'center', 
-                alignItems: 'center', 
-                height: '100%',
-                flexDirection: 'column',
-                gap: 2
-              }}>
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                 <CircularProgress />
                 <Typography variant="body2" color="text.secondary">
-                  Folie wird verarbeitet...
+                  Folien werden verarbeitet...
                 </Typography>
               </Box>
             )}
-            
+
             {error && (
-              <Box sx={{ 
-                p: 2, 
-                bgcolor: '#ffebee', 
-                borderRadius: 1,
-                border: '1px solid #ffcdd2'
-              }}>
-                <Typography color="error">
-                  {error}
-                </Typography>
-              </Box>
+              <Typography color="error">
+                {error}
+              </Typography>
             )}
 
             {summaryResult && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {/* Folienbild */}
-                {summaryResult.imagePath && (
-                  <Box sx={{ mb: 3 }}>
-                    <Typography variant="subtitle1" gutterBottom sx={{ color: 'text.primary', fontWeight: 500 }}>
-                      Folienbild:
-                    </Typography>
-                    <Box sx={{ 
-                      border: '1px solid #ddd',
-                      borderRadius: '4px',
-                      overflow: 'hidden',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                    }}>
-                      <img
-                        src={`http://127.0.0.1:8000${summaryResult.imagePath}`}
-                        alt="Folienvorschau"
-                        style={{ 
-                          maxWidth: '100%', 
-                          height: 'auto',
-                          display: 'block'
-                        }}
-                      />
-                    </Box>
-                  </Box>
-                )}
-                
-                {/* Originaltext */}
-                <Box sx={{ mb: 3 }}>
-                  <Typography variant="subtitle1" gutterBottom sx={{ color: 'text.primary', fontWeight: 500 }}>
-                    Originaltext:
-                  </Typography>
-                  <Box sx={{ 
-                    p: 2,
-                    bgcolor: '#f5f5f5',
-                    borderRadius: '4px',
-                    border: '1px solid #e0e0e0'
-                  }}>
-                    <Typography variant="body2" sx={{ 
-                      whiteSpace: 'pre-wrap',
-                      color: 'text.secondary'
-                    }}>
-                      {summaryResult.originalText || 'Kein Originaltext verfügbar'}
-                    </Typography>
-                  </Box>
-                </Box>
-
-                {/* Zusammenfassung */}
-                <Box>
-                  <Typography variant="subtitle1" gutterBottom sx={{ color: 'text.primary', fontWeight: 500 }}>
-                    Zusammenfassung:
-                  </Typography>
-                  <Box sx={{ 
-                    p: 2,
-                    bgcolor: '#e3f2fd',
-                    borderRadius: '4px',
-                    border: '1px solid #bbdefb'
-                  }}>
-                    <Typography variant="body1" sx={{ 
-                      whiteSpace: 'pre-wrap',
-                      color: 'text.primary'
-                    }}>
-                      {summaryResult.summary || 'Keine Zusammenfassung verfügbar'}
-                    </Typography>
-                  </Box>
-                </Box>
+              <Box>
+                <Typography variant="h6" sx={{ mt: 4 }}>
+                  Umfassende Zusammenfassung:
+                </Typography>
+                <Typography variant="body2">
+                  {summaryResult.result['comprehensive_summary']}
+                </Typography>
               </Box>
             )}
           </Box>
