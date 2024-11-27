@@ -103,71 +103,65 @@ class MultimodalSummarizer:
         self.flamingo_model, self.flamingo_image_processor, self.flamingo_tokenizer = create_model_and_transforms(
           clip_vision_encoder_path="ViT-B-32",  # Kleinere ViT-Variante
           clip_vision_encoder_pretrained="openai",
-          lang_encoder_path="facebook/bart-large",  # Kompatibles Modell wie BART
+          lang_encoder_path="facebook/bart-large",
           tokenizer_path="facebook/bart-large",
           cross_attn_every_n_layers=4,
           decoder_layers_attr_name="model.decoder.layers",
         )
         self.flamingo_model.to(self.device)
+        # Ensure tokenizer uses left-padding for compatibility with decoder-only architectures
+        self.flamingo_tokenizer.padding_side = 'left'
 
-    def process_file(self, file_path, slide_number=0):
+
+
+    def process_multiple_slides(self, file_path, start_slide=0, max_slides=3):
         try:
-            image, text = self.extract_slide_content(file_path, slide_number)
-            image_features = self.get_clip_features(image)
+            slides_content = []
+            for slide_number in range(start_slide, start_slide + max_slides):
+                try:
+                    slide_image, slide_text = self.extract_slide_content(file_path, slide_number)
+                    slides_content.append((slide_image, slide_text))
+                except IndexError:
+                    print(f"Folie {slide_number} existiert nicht in der Datei.")
+                    break
 
-            summary = self.summarize_text(text) if len(text) > 100 else text
-            text_embedding = self.sentence_model.encode(summary)
+            if not slides_content:
+                raise ValueError("Keine Folien zum Verarbeiten gefunden.")
 
-            # Prozessiere mit Flamingo
-            flamingo_summary = self._generate_flamingo_summary(image, text)
+            # Separate images and texts
+            images = [content[0] for content in slides_content]
+            texts = [content[1] for content in slides_content]
 
-            # Nutze Flamingo und BART zur finalen Zusammenfassung
-            final_summary = self._generate_bart_summary(flamingo_summary)
+            clip_features = self._process_images_batch(images)
+            summaries = [self.summarize_text(text) if len(text) > 100 else text for text in texts]
+            text_embeddings = self._process_texts_batch(summaries)
+            flamingo_summaries = self._process_flamingo_batch(images, texts)
+            final_summaries = [self._generate_bart_summary(summary) for summary in flamingo_summaries]
+
+            processed_slides = [
+                {
+                    'original_text': texts[i],
+                    'summary': flamingo_summaries[i],
+                    'image_features': clip_features[i].tolist(),
+                    'text_embedding': text_embeddings[i].tolist(),
+                    'image_path': f"slide_{start_slide + i}.png"
+                }
+                for i in range(len(images))
+            ]
+
+            # Kombiniere alle Zusammenfassungen zu einer umfassenden Zusammenfassung
+            all_summaries = " ".join(final_summaries)
+            print(all_summaries)
+            comprehensive_summary = self.summarize_text(all_summaries, max_length=200)
 
             return {
-                'original_text': text,
-                'summary': final_summary,
-                'image_path': f"slide_{slide_number}.png",
-                'image_features': image_features.tolist(),
-                'text_embedding': text_embedding.tolist()
+                'processed_slides': processed_slides,
+                'comprehensive_summary': comprehensive_summary
             }
+
         except Exception as e:
-            print(f"Fehler: {str(e)}")
+            print(f"Fehler bei der Verarbeitung mehrerer Folien: {str(e)}")
             return None
-
-    def _generate_flamingo_summary(self, image, text):
-        # Bereite das Bild vor
-        image_tensor = self.flamingo_image_processor(image).unsqueeze(0).to(self.device)
-        vision_x = image_tensor.unsqueeze(0).unsqueeze(0)  # Erweitere Dimensionen
-
-        # Bereite den Text vor
-        context = f"Text: {text}"
-        tokenizer_output = self.flamingo_tokenizer(
-            [context] * vision_x.shape[0],  # Gleichen Kontext für jede Bildsequenz verwenden
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=1024
-        )
-        lang_x = tokenizer_output.input_ids.to(self.device)
-        attention_mask = tokenizer_output.attention_mask.to(self.device)
-
-        # Generiere eine Zusammenfassung mit Flamingo
-        outputs = self.flamingo_model.generate(
-            vision_x=vision_x,
-            lang_x=lang_x,
-            attention_mask=attention_mask,
-            max_new_tokens=100,
-            do_sample=True,  # Sampling aktivieren
-            top_k=50,
-            #pad_token_id=self.flamingo_tokenizer.pad_token_id or self.flamingo_tokenizer.eos_token_id,
-            #eos_token_id=self.flamingo_tokenizer.eos_token_id,
-            num_beams=4
-        )
-
-        # Dekodiere die generierten Tokens
-        flamingo_summary = self.flamingo_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return flamingo_summary
 
     def _generate_bart_summary(self, flamingo_summary):
         # Nutze BART für die finale Textzusammenfassung
@@ -182,6 +176,96 @@ class MultimodalSummarizer:
         summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
         summary = self.text_cleaner.clean_text(summary)
         return summary
+
+    def _process_images_batch(self, images):
+        try:
+            image_tensors = [self.clip_preprocess(image).unsqueeze(0) for image in images]
+            image_batch = torch.cat(image_tensors).to(self.device)
+            with torch.no_grad():
+                image_features = self.clip_model.encode_image(image_batch)
+            return image_features.cpu().numpy()
+        except Exception as e:
+            print(f"Fehler bei der Verarbeitung von Bild-Batches: {str(e)}")
+            return None
+
+    def _process_texts_batch(self, texts):
+        try:
+            text_embeddings = self.sentence_model.encode(texts, convert_to_tensor=True)
+            return text_embeddings.cpu().numpy()
+        except Exception as e:
+            print(f"Fehler bei der Verarbeitung von Text-Batches: {str(e)}")
+            return None
+
+    def _process_flamingo_batch(self, images, texts):
+        try:
+            image_tensors = [self.flamingo_image_processor(image).unsqueeze(0).to(self.device) for image in images]
+            vision_x = torch.cat([tensor.unsqueeze(0).unsqueeze(0) for tensor in image_tensors], dim=0)
+
+            contexts = [f"Text: {text}" for text in texts]
+            tokenizer_outputs = self.flamingo_tokenizer(
+                contexts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=1024,
+                padding_side='left',   # Ensure left padding
+            )
+            lang_x = tokenizer_outputs.input_ids.to(self.device)
+            attention_mask = tokenizer_outputs.attention_mask.to(self.device)
+
+            outputs = self.flamingo_model.generate(
+                vision_x=vision_x,
+                lang_x=lang_x,
+                attention_mask=attention_mask,
+                max_new_tokens=100,
+                do_sample=True,
+                top_k=50,
+                num_beams=4
+            )
+            flamingo_summaries = [
+                self.flamingo_tokenizer.decode(output, skip_special_tokens=True) for output in outputs
+            ]
+            return flamingo_summaries
+        except Exception as e:
+            print(f"Fehler bei der Verarbeitung von Flamingo-Batches: {str(e)}")
+            return None
+
+    def summarize_text(self, text, max_length=150, chunk_size=800):
+        """
+        Erstellt eine Zusammenfassung eines Textes. 
+        Wenn der Text zu lang ist, wird er in Abschnitte unterteilt und schrittweise zusammengefasst.
+        """
+        try:
+            # Text in handhabbare Teile aufteilen
+            if len(text) > chunk_size:
+                chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+            else:
+                chunks = [text]
+            
+            summaries = []
+            for chunk in chunks:
+                inputs = self.summarizer_tokenizer(chunk, max_length=1024, truncation=True, return_tensors="pt")
+                summary_ids = self.summarizer_model.generate(
+                    inputs["input_ids"],
+                    max_length=max_length,
+                    min_length=40,
+                    length_penalty=2.0,
+                    num_beams=4,
+                )
+                summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+                summaries.append(summary)
+            
+            # Fasse die einzelnen Abschnitte erneut zusammen
+            combined_summary = " ".join(summaries)
+            if len(combined_summary) > chunk_size:
+                # Zweite Zusammenfassung, falls die kombinierte zu lang ist
+                return self.summarize_text(combined_summary, max_length=max_length)
+            return combined_summary
+        
+        except Exception as e:
+            print(f"Fehler bei der Textzusammenfassung: {str(e)}")
+            return ""
+
 
     def extract_slide_content(self, file_path, slide_number=0):
         file_extension = os.path.splitext(file_path)[1].lower()
@@ -208,29 +292,7 @@ class MultimodalSummarizer:
             raise ValueError("Nicht unterstütztes Dateiformat")
 
         text = self.text_cleaner.clean_text(text)
-        text = self.text_cleaner.remove_english_terms(text)
-
         return slide_image, text.strip()
-
-    def get_clip_features(self, image):
-        image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            image_features = self.clip_model.encode_image(image_input)
-        return image_features.cpu().numpy()
-
-    def summarize_text(self, text, max_length=150):
-        inputs = self.summarizer_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt")
-        summary_ids = self.summarizer_model.generate(
-            inputs["input_ids"],
-            max_length=max_length,
-            min_length=40,
-            length_penalty=2.0,
-            num_beams=4,
-        )
-        summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-        summary = self.text_cleaner.clean_text(summary)
-        summary = self.text_cleaner.remove_english_terms(summary)
-        return summary
 
     def _extract_slide_image(self, slide):
         temp_img_path = "temp_slide.png"
@@ -238,35 +300,6 @@ class MultimodalSummarizer:
         image = Image.open(temp_img_path)
         os.remove(temp_img_path)
         return image
-
-    def process_multiple_slides(self, file_path, start_slide=0, max_slides=3):
-        try:
-            # Ergebnisse für jede Folie speichern
-            processed_slides = []
-
-            # Iteriere über die gewünschten Folien
-            for slide_number in range(start_slide, start_slide + max_slides):
-                try:
-                    result = self.process_file(file_path, slide_number=slide_number)
-                    if result:
-                        processed_slides.append(result)
-                except IndexError:
-                    # Wenn es weniger Folien als erwartet gibt
-                    print(f"Folie {slide_number} existiert nicht in der Datei.")
-                    break
-
-            # Erstelle eine umfassende Zusammenfassung aus allen individuellen Zusammenfassungen
-            all_summaries = " ".join([slide['summary'] for slide in processed_slides if 'summary' in slide])
-            comprehensive_summary = self.summarize_text(all_summaries)
-
-            return {
-                'processed_slides': processed_slides,
-                'comprehensive_summary': comprehensive_summary
-            }
-
-        except Exception as e:
-            print(f"Fehler bei der Verarbeitung mehrerer Folien: {str(e)}")
-            return None
 
 # Globale Instanz des Summarizers
 summarizer = MultimodalSummarizer()
