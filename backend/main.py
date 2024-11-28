@@ -7,6 +7,7 @@ import torch
 import clip
 from PIL import Image
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoProcessor, AutoModelForVision2Seq
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from open_flamingo import create_model_and_transforms
 from pdf2image import convert_from_path
 from pptx import Presentation
@@ -54,22 +55,38 @@ class TextCleaner:
             os.system('python -m spacy download de_core_news_sm')
             self.nlp = spacy.load('de_core_news_sm')
 
+    import re
+
     def clean_text(self, text):
+        # Entferne überflüssige Leerzeichen und ersetze unsinnige Zeichen
         text = ' '.join(text.split())
         text = text.replace('|', 'I')
         text = text.replace('1', 'I')
         text = text.replace('0', 'O')
+        
+        # Setze Leerzeichen zwischen kleinen und großen Buchstaben, wenn sie ohne Leerzeichen verbunden sind
         text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
         
+        # Bereinige den Text, um unerwünschte Zeichen zu entfernen (z.B. Sonderzeichen und Emojis)
+        text = re.sub(r'[^a-zA-Z0-9äöüÄÖÜß .,?!]', '', text)
+        
+        # Verwende NLP, um den Text in Sätze zu zerlegen und zu säubern
         doc = self.nlp(text)
         cleaned_sentences = []
         for sent in doc.sents:
             sentence = sent.text.strip()
+            
+            # Setze den ersten Buchstaben eines Satzes groß
             sentence = sentence[0].upper() + sentence[1:] if sentence else ""
+            
+            # Falls der Satz kein abschließendes Satzzeichen hat, füge einen Punkt hinzu
             if sentence and not sentence[-1] in ['.', '!', '?']:
                 sentence += '.'
+            
+            # Füge den Satz zur Liste der bereinigten Sätze hinzu
             cleaned_sentences.append(sentence)
         
+        # Gib den bereinigten Text als einen einzelnen Textstring zurück
         return ' '.join(cleaned_sentences)
 
     def remove_english_terms(self, text):
@@ -88,6 +105,10 @@ class MultimodalSummarizer:
 
         # CLIP Model
         self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=self.device)
+
+        # BLIP Model
+        self.blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+        self.blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(self.device)
 
         # Summary Model
         self.summarizer_tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-cnn")
@@ -112,9 +133,20 @@ class MultimodalSummarizer:
         # Ensure tokenizer uses left-padding for compatibility with decoder-only architectures
         self.flamingo_tokenizer.padding_side = 'left'
 
+    def _describe_image_with_blip(self, image):
+        """
+        Beschreibt ein Bild mit BLIP.
+        """
+        try:
+            inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
+            outputs = self.blip_model.generate(**inputs, max_length=50, num_beams=5)
+            description = self.blip_processor.decode(outputs[0], skip_special_tokens=True)
+            return description
+        except Exception as e:
+            print(f"Fehler bei der Bildbeschreibung mit BLIP: {str(e)}")
+            return "Keine Beschreibung verfügbar"
 
-
-    def process_multiple_slides(self, file_path, start_slide=0, max_slides=3):
+    def process_multiple_slides(self, file_path, start_slide=0, max_slides=1):
         try:
             slides_content = []
             for slide_number in range(start_slide, start_slide + max_slides):
@@ -132,27 +164,60 @@ class MultimodalSummarizer:
             images = [content[0] for content in slides_content]
             texts = [content[1] for content in slides_content]
 
-            clip_features = self._process_images_batch(images)
-            summaries = [self.summarize_text(text) if len(text) > 100 else text for text in texts]
-            text_embeddings = self._process_texts_batch(summaries)
-            flamingo_summaries = self._process_flamingo_batch(images, texts)
-            final_summaries = [self._generate_bart_summary(summary) for summary in flamingo_summaries]
+             # Verarbeite die Bilder mit BLIP
+            image_descriptions = [self._describe_image_with_blip(image) or "Keine Bildbeschreibung verfügbar" for image in images]
+
+            # Verarbeite Flamingo nur für die Folien mit Text
+            flamingo_summaries = []
+            for i, text in enumerate(texts):
+                if text.strip():  # Überprüfen, ob Text vorhanden ist
+                    flamingo_summaries.append("Keine Textzusammenfassung verfügbar")  # Keine Zusammenfassung generieren, wenn Text leer
+                else:
+                    flamingo_summaries.append(None)  # Hier könnte eine einfache Möglichkeit sein, auf Bildbeschreibung zu setzen
+
+            # Verarbeite Flamingo in einem Batch und stelle sicher, dass eine gültige Ausgabe vorhanden ist
+            try:
+                final_flamingo_summaries = self._process_flamingo_batch(images, texts)
+                if final_flamingo_summaries is None:
+                    final_flamingo_summaries = ["Fehlerhafte Zusammenfassung" for _ in images]  # Fehlerbehandlung
+            except Exception as e:
+                print(f"Fehler bei der Verarbeitung von Flamingo: {str(e)}")
+                final_flamingo_summaries = ["Fehlerhafte Zusammenfassung" for _ in images]  # Fehlerbehandlung
+
+            # Kombiniere die Ergebnisse
+            combined_summaries = []
+            for i in range(len(images)):
+                if  final_flamingo_summaries[i] != "Fehlerhafte Zusammenfassung" and  final_flamingo_summaries[i]:  # Sicherstellen, dass die Zusammenfassung gültig ist
+                    combined_summaries.append(
+                        f"Bildbeschreibung: {image_descriptions[i]}. Textzusammenfassung: { final_flamingo_summaries[i]}"
+                    )
+                else:
+                    combined_summaries.append(f"Bildbeschreibung: {image_descriptions[i]}.")
+
+            # Finalisiere die Zusammenfassung mit BART
+            final_summaries = [self._generate_bart_summary(summary) for summary in combined_summaries]
 
             processed_slides = [
                 {
                     'original_text': texts[i],
-                    'summary': flamingo_summaries[i],
-                    'image_features': clip_features[i].tolist(),
-                    'text_embedding': text_embeddings[i].tolist(),
+                    'image_description': image_descriptions[i],
+                    'summary': final_summaries[i],
                     'image_path': f"slide_{start_slide + i}.png"
                 }
                 for i in range(len(images))
             ]
 
-            # Kombiniere alle Zusammenfassungen zu einer umfassenden Zusammenfassung
+            # Kombiniere alle finalen Zusammenfassungen zu einer umfassenden
             all_summaries = " ".join(final_summaries)
-            print(all_summaries)
-            comprehensive_summary = self.summarize_text(all_summaries, max_length=200)
+            # Prüfe, ob sinnvolle Zusammenfassungen existieren
+            if not all_summaries.strip():
+                comprehensive_summary = "Diese Präsentation enthält nur folgende Bildbeschreibungen:\n"
+                for i, desc in enumerate(image_descriptions):
+                    comprehensive_summary += f"Folie {i + 1}: {desc}\n"
+            else:
+                comprehensive_summary = "Zusammenfassung der Präsentation:\n"
+                for i, summary in enumerate(final_summaries):
+                    comprehensive_summary += f"Folie {i + 1}: {summary}\n"
 
             return {
                 'processed_slides': processed_slides,
@@ -201,7 +266,7 @@ class MultimodalSummarizer:
             image_tensors = [self.flamingo_image_processor(image).unsqueeze(0).to(self.device) for image in images]
             vision_x = torch.cat([tensor.unsqueeze(0).unsqueeze(0) for tensor in image_tensors], dim=0)
 
-            contexts = [f"Text: {text}" for text in texts]
+            contexts = [f"{text}" for text in texts]
             tokenizer_outputs = self.flamingo_tokenizer(
                 contexts,
                 return_tensors="pt",

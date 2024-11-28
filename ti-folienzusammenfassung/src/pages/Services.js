@@ -4,7 +4,7 @@ import { Box, Button, Typography, TextField, FormControl, CircularProgress } fro
 const Services = () => {
   const [file, setFile] = useState(null);
   const [startSlide, setStartSlide] = useState(0);
-  const [maxSlides, setMaxSlides] = useState(3);
+  const [maxSlides, setMaxSlides] = useState(1);
   const [loading, setLoading] = useState(false);
   const [summaryResult, setSummaryResult] = useState(null);
   const [error, setError] = useState(null);
@@ -195,9 +195,6 @@ const Services = () => {
 
             {summaryResult && (
               <Box>
-                <Typography variant="h6" sx={{ mt: 4 }}>
-                  Umfassende Zusammenfassung:
-                </Typography>
                 <Typography variant="body2">
                   {summaryResult.result['comprehensive_summary']}
                 </Typography>
