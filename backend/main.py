@@ -18,6 +18,7 @@ import spacy
 import re
 from typing import Optional
 import shutil
+from deep_translator import GoogleTranslator
 
 # FastAPI App initialisieren
 app = FastAPI(
@@ -58,46 +59,62 @@ class TextCleaner:
     import re
 
     def clean_text(self, text):
-        # Entferne überflüssige Leerzeichen und ersetze unsinnige Zeichen
-        text = ' '.join(text.split())
-        text = text.replace('|', 'I')
-        text = text.replace('1', 'I')
-        text = text.replace('0', 'O')
+        # Entferne sehr kurze "Wörter" und offensichtliche OCR-Fehler
+        words = text.split()
+        filtered_words = []
         
-        # Setze Leerzeichen zwischen kleinen und großen Buchstaben, wenn sie ohne Leerzeichen verbunden sind
-        text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
+        for word in words:
+            # Ignoriere sehr kurze Wörter außer bestimmten Ausnahmen
+            if len(word) <= 1 and word.lower() not in ['a', 'i', 'o', '&']:
+                continue
+                
+            # Entferne Wörter mit zu vielen Großbuchstaben in der Mitte
+            if len(word) > 3:
+                mid_caps = sum(1 for c in word[1:] if c.isupper())
+                if mid_caps > len(word) / 2:
+                    continue
+                    
+            # Entferne "Wörter" mit zu vielen Sonderzeichen
+            special_chars = sum(1 for c in word if not c.isalnum())
+            if special_chars > len(word) / 3:
+                continue
+                
+            filtered_words.append(word)
         
-        # Bereinige den Text, um unerwünschte Zeichen zu entfernen (z.B. Sonderzeichen und Emojis)
-        text = re.sub(r'[^a-zA-Z0-9äöüÄÖÜß .,?!]', '', text)
+        text = ' '.join(filtered_words)
         
-        # Verwende NLP, um den Text in Sätze zu zerlegen und zu säubern
-        doc = self.nlp(text)
-        cleaned_sentences = []
-        for sent in doc.sents:
-            sentence = sent.text.strip()
+        # Weitere Bereinigung
+        text = re.sub(r'\s+', ' ', text)  # Mehrfache Leerzeichen entfernen
+        text = text.strip()
+        
+        # Wenn der Text zu "chaotisch" erscheint, ignoriere ihn
+        if len(text.split()) < 3 or len(text) < 10:
+            return ""
             
-            # Setze den ersten Buchstaben eines Satzes groß
-            sentence = sentence[0].upper() + sentence[1:] if sentence else ""
-            
-            # Falls der Satz kein abschließendes Satzzeichen hat, füge einen Punkt hinzu
-            if sentence and not sentence[-1] in ['.', '!', '?']:
-                sentence += '.'
-            
-            # Füge den Satz zur Liste der bereinigten Sätze hinzu
-            cleaned_sentences.append(sentence)
-        
-        # Gib den bereinigten Text als einen einzelnen Textstring zurück
-        return ' '.join(cleaned_sentences)
-
-    def remove_english_terms(self, text):
-        common_replacements = {
-            'enthusiastically': 'enthusiastisch',
-            'with': 'mit',
-            'Stakeholder': 'Interessengruppen',
-        }
-        for eng, ger in common_replacements.items():
-            text = text.replace(eng, ger)
         return text
+
+    def is_valid_text(self, text):
+        """
+        Prüft, ob der Text gültig und sinnvoll ist.
+        """
+        if not text or len(text.strip()) < 10:
+            return False
+            
+        words = text.split()
+        if len(words) < 3:
+            return False
+            
+        # Prüfe auf zu viele Einzelbuchstaben
+        single_chars = sum(1 for word in words if len(word) == 1)
+        if len(words) > 0 and single_chars / len(words) > 0.3:
+            return False
+            
+        # Prüfe auf zu viele Sonderzeichen
+        special_chars = sum(1 for char in text if char in '.,!?')
+        if len(text) > 0 and special_chars / len(text) > 0.2:
+            return False
+            
+        return True
 
 class MultimodalSummarizer:
     def __init__(self):
@@ -135,12 +152,20 @@ class MultimodalSummarizer:
 
     def _describe_image_with_blip(self, image):
         """
-        Beschreibt ein Bild mit BLIP.
+        Beschreibt ein Bild mit BLIP und übersetzt es ins Deutsche.
         """
         try:
             inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
             outputs = self.blip_model.generate(**inputs, max_length=50, num_beams=5)
             description = self.blip_processor.decode(outputs[0], skip_special_tokens=True)
+            
+            # Übersetze die Beschreibung ins Deutsche
+            try:
+                translator = GoogleTranslator(source='en', target='de')
+                description = translator.translate(description)
+            except Exception as e:
+                print(f"Fehler bei der Übersetzung: {str(e)}")
+            
             return description
         except Exception as e:
             print(f"Fehler bei der Bildbeschreibung mit BLIP: {str(e)}")
@@ -170,10 +195,10 @@ class MultimodalSummarizer:
             # Verarbeite Flamingo nur für die Folien mit Text
             flamingo_summaries = []
             for i, text in enumerate(texts):
-                if text.strip():  # Überprüfen, ob Text vorhanden ist
-                    flamingo_summaries.append("Keine Textzusammenfassung verfügbar")  # Keine Zusammenfassung generieren, wenn Text leer
-                else:
-                    flamingo_summaries.append(None)  # Hier könnte eine einfache Möglichkeit sein, auf Bildbeschreibung zu setzen
+                if text.strip():  # Wenn Text vorhanden ist
+                    flamingo_summaries.append(None)  # Flamingo wird später die Zusammenfassung generieren
+                else:  # Wenn kein Text vorhanden ist
+                    flamingo_summaries.append("Keine Textzusammenfassung verfügbar")
 
             # Verarbeite Flamingo in einem Batch und stelle sicher, dass eine gültige Ausgabe vorhanden ist
             try:
@@ -187,12 +212,12 @@ class MultimodalSummarizer:
             # Kombiniere die Ergebnisse
             combined_summaries = []
             for i in range(len(images)):
-                if  final_flamingo_summaries[i] != "Fehlerhafte Zusammenfassung" and  final_flamingo_summaries[i]:  # Sicherstellen, dass die Zusammenfassung gültig ist
-                    combined_summaries.append(
-                        f"Bildbeschreibung: {image_descriptions[i]}. Textzusammenfassung: { final_flamingo_summaries[i]}"
-                    )
-                else:
-                    combined_summaries.append(f"Bildbeschreibung: {image_descriptions[i]}.")
+                summary = ""
+                if texts[i].strip():  # Nur wenn tatsächlich Text vorhanden ist
+                    if final_flamingo_summaries[i] != "Fehlerhafte Zusammenfassung" and final_flamingo_summaries[i]:
+                        if self.text_cleaner.is_valid_text(texts[i]):
+                            summary = f"{texts[i]}"
+                        combined_summaries.append(summary)
 
             # Finalisiere die Zusammenfassung mit BART
             final_summaries = [self._generate_bart_summary(summary) for summary in combined_summaries]
@@ -207,17 +232,21 @@ class MultimodalSummarizer:
                 for i in range(len(images))
             ]
 
-            # Kombiniere alle finalen Zusammenfassungen zu einer umfassenden
-            all_summaries = " ".join(final_summaries)
-            # Prüfe, ob sinnvolle Zusammenfassungen existieren
-            if not all_summaries.strip():
-                comprehensive_summary = "Diese Präsentation enthält nur folgende Bildbeschreibungen:\n"
-                for i, desc in enumerate(image_descriptions):
-                    comprehensive_summary += f"Folie {i + 1}: {desc}\n"
-            else:
-                comprehensive_summary = "Zusammenfassung der Präsentation:\n"
-                for i, summary in enumerate(final_summaries):
-                    comprehensive_summary += f"Folie {i + 1}: {summary}\n"
+            # Erstelle die Gesamtzusammenfassung
+            comprehensive_summary = "Zusammenfassung der Präsentation:\n"
+            for i in range(len(processed_slides)):
+                summary = f"Folie {i + 1}: "
+                
+                # Füge Bildbeschreibung hinzu
+                if image_descriptions[i] and image_descriptions[i] != "Keine Beschreibung verfügbar":
+                    summary += f"Bildbeschreibung: {image_descriptions[i]}. "
+                    
+                # Füge Textzusammenfassung nur hinzu wenn der Text sinnvoll ist
+                cleaned_text = self.text_cleaner.clean_text(texts[i])
+                if cleaned_text:
+                    summary += f"Textzusammenfassung: {final_summaries[i]}"
+                    
+                comprehensive_summary += summary.strip() + "\n"
 
             return {
                 'processed_slides': processed_slides,
@@ -228,19 +257,27 @@ class MultimodalSummarizer:
             print(f"Fehler bei der Verarbeitung mehrerer Folien: {str(e)}")
             return None
 
-    def _generate_bart_summary(self, flamingo_summary):
-        # Nutze BART für die finale Textzusammenfassung
-        inputs = self.summarizer_tokenizer(flamingo_summary, max_length=1024, truncation=True, return_tensors="pt")
-        summary_ids = self.summarizer_model.generate(
-            inputs["input_ids"],
-            max_length=150,
-            min_length=40,
-            length_penalty=2.0,
-            num_beams=4,
-        )
-        summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-        summary = self.text_cleaner.clean_text(summary)
-        return summary
+    def _generate_bart_summary(self, text):
+        """
+        Generiert eine Zusammenfassung mit BART.
+        """
+        if not text.strip():
+            return ""
+
+        try:
+            inputs = self.summarizer_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt")
+            summary_ids = self.summarizer_model.generate(
+                inputs["input_ids"],
+                max_length=150,
+                min_length=40,
+                length_penalty=2.0,
+                num_beams=4,
+            )
+            summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            return self.text_cleaner.clean_text(summary)
+        except Exception as e:
+            print(f"Fehler bei der BART-Zusammenfassung: {str(e)}")
+            return ""
 
     def _process_images_batch(self, images):
         try:
