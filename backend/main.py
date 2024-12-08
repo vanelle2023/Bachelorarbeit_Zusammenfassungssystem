@@ -171,6 +171,44 @@ class MultimodalSummarizer:
             print(f"Fehler bei der Bildbeschreibung mit BLIP: {str(e)}")
             return "Keine Beschreibung verfügbar"
 
+    def calculate_clip_similarity(self, image, text):
+        """
+        Berechnet die Ähnlichkeit zwischen Bild und Text mit CLIP.
+        
+        Args:
+            image (PIL.Image): Das Eingabebild
+            text (str): Der Eingabetext
+            
+        Returns:
+            float: Ähnlichkeitswert zwischen 0 und 1
+        """
+        try:
+            # Bild vorverarbeiten
+            image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
+            
+            # Text vorverarbeiten
+            text_input = clip.tokenize([text]).to(self.device)
+            
+            with torch.no_grad():
+                # Berechne Features
+                image_features = self.clip_model.encode_image(image_input)
+                text_features = self.clip_model.encode_text(text_input)
+                
+                # Normalisiere Features
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                
+                # Berechne Ähnlichkeit
+                similarity = (image_features @ text_features.T).item()
+                
+                # Konvertiere zu einem Wert zwischen 0 und 1
+                similarity = (similarity + 1) / 2
+                
+            return similarity
+        except Exception as e:
+            print(f"Fehler bei der CLIP-Ähnlichkeitsberechnung: {str(e)}")
+            return 0.0
+
     def process_multiple_slides(self, file_path, start_slide=0, max_slides=1):
         try:
             slides_content = []
@@ -191,6 +229,15 @@ class MultimodalSummarizer:
 
              # Verarbeite die Bilder mit BLIP
             image_descriptions = [self._describe_image_with_blip(image) or "Keine Bildbeschreibung verfügbar" for image in images]
+
+            # Berechne CLIP-Ähnlichkeiten
+            clip_similarities = []
+            for i in range(len(images)):
+                if texts[i].strip():  # Nur wenn Text vorhanden ist
+                    similarity = self.calculate_clip_similarity(images[i], texts[i])
+                    clip_similarities.append(similarity)
+                else:
+                    clip_similarities.append(0.0)
 
             # Verarbeite Flamingo nur für die Folien mit Text
             flamingo_summaries = []
@@ -227,26 +274,14 @@ class MultimodalSummarizer:
                     'original_text': texts[i],
                     'image_description': image_descriptions[i],
                     'summary': final_summaries[i],
-                    'image_path': f"slide_{start_slide + i}.png"
+                    'image_path': f"slide_{start_slide + i}.png",
+                    'clip_similarity': clip_similarities[i]
                 }
                 for i in range(len(images))
             ]
 
-            # Erstelle die Gesamtzusammenfassung
-            comprehensive_summary = "Zusammenfassung der Präsentation:\n"
-            for i in range(len(processed_slides)):
-                summary = f"Folie {i + 1}: "
-                
-                # Füge Bildbeschreibung hinzu
-                if image_descriptions[i] and image_descriptions[i] != "Keine Beschreibung verfügbar":
-                    summary += f"Bildbeschreibung: {image_descriptions[i]}. "
-                    
-                # Füge Textzusammenfassung nur hinzu wenn der Text sinnvoll ist
-                cleaned_text = self.text_cleaner.clean_text(texts[i])
-                if cleaned_text:
-                    summary += f"Textzusammenfassung: {final_summaries[i]}"
-                    
-                comprehensive_summary += summary.strip() + "\n"
+            # Formatierte Gesamtausgabe
+            comprehensive_summary = self._generate_comprehensive_summary(processed_slides)
 
             return {
                 'processed_slides': processed_slides,
@@ -256,6 +291,36 @@ class MultimodalSummarizer:
         except Exception as e:
             print(f"Fehler bei der Verarbeitung mehrerer Folien: {str(e)}")
             return None
+
+    def _generate_comprehensive_summary(self, processed_slides):
+        # Verwende os.linesep für plattformübergreifende Konsistenz
+        import os
+        newline = os.linesep
+
+        # Überschrift der Zusammenfassung
+        sections = [f"Zusammenfassung der Folien{newline}", "=" * 30 + newline]
+
+        for i, slide in enumerate(processed_slides):
+            # Abschnitt für jede Folie
+            sections.append(f"{newline}Folie {i + 1}{newline}")
+            sections.append("-" * 10 + newline)
+
+            # Bildbeschreibung
+            if slide['image_description']:
+                sections.append(f"Bildbeschreibung:{newline}{slide['image_description']}{newline}")
+
+            # Text-Bild-Ähnlichkeit
+            sections.append(f"Text-Bild-Ähnlichkeit:{newline}{slide['clip_similarity']:.1%}{newline}")
+
+            # Textzusammenfassung
+            if slide['summary']:
+                sections.append(f"Textzusammenfassung:{newline}{slide['summary']}{newline}")
+
+            # Leerzeile zwischen Folien
+            sections.append(newline)
+
+        # Verarbeite alle Teile und füge sie zu einem String zusammen
+        return "".join(sections)
 
     def _generate_bart_summary(self, text):
         """

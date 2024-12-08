@@ -195,7 +195,7 @@ const Services = () => {
 
             {summaryResult && (
               <Box>
-                <Typography variant="body2">
+                <Typography variant="body2" style={{ whiteSpace: "pre-wrap" }}>
                   {summaryResult.result['comprehensive_summary']}
                 </Typography>
               </Box>
