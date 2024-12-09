@@ -84,6 +84,7 @@ class TextCleaner:
         text = ' '.join(filtered_words)
         
         # Weitere Bereinigung
+        text = re.sub(r'[^\w\s.,!?]', '', text) # Entferne nicht alphanumerische Zeichen außer Satzzeichen
         text = re.sub(r'\s+', ' ', text)  # Mehrfache Leerzeichen entfernen
         text = text.strip()
         
@@ -149,26 +150,79 @@ class MultimodalSummarizer:
         self.flamingo_model.to(self.device)
         # Ensure tokenizer uses left-padding for compatibility with decoder-only architectures
         self.flamingo_tokenizer.padding_side = 'left'
+        # Add minimum confidence thresholds
+        self.MIN_CONFIDENCE_THRESHOLD = 0.3
+        self.MIN_TEXT_LENGTH = 20
+        self.MAX_SUMMARY_LENGTH = 200
+    
+    def _clean_and_validate_text(self, text):
+        """
+        Verbesserte Textbereinigung und Validierung
+        """
+        if not text or len(text.strip()) < self.MIN_TEXT_LENGTH:
+            return None
+            
+        # Entferne OCR-Artefakte und störende Zeichen
+        cleaned = re.sub(r'\s+', ' ', text)  # Normalisiere Whitespace
+        cleaned = re.sub(r'[^\w\s.,!?()-]', '', cleaned)  # Behalte nur sinnvolle Zeichen
+        
+        # Entferne alleinstehende Zahlen und kurze Zeichenfolgen
+        words = cleaned.split()
+        filtered_words = []
+        for word in words:
+            # Ignoriere reine Zahlen und zu kurze "Wörter"
+            if word.isdigit() or (len(word) < 3 and not word.lower() in ['in', 'an', 'zu', 'um']):
+                continue
+            filtered_words.append(word)
+        
+        cleaned = ' '.join(filtered_words)
+        
+        # Prüfe auf Mindestqualität
+        if len(cleaned.split()) < 3:
+            return None
+            
+        return cleaned.strip()
 
     def _describe_image_with_blip(self, image):
-        """
-        Beschreibt ein Bild mit BLIP und übersetzt es ins Deutsche.
-        """
         try:
-            inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
-            outputs = self.blip_model.generate(**inputs, max_length=50, num_beams=5)
-            description = self.blip_processor.decode(outputs[0], skip_special_tokens=True)
+            # Generiere mehrere Beschreibungen mit unterschiedlichen Parametern
+            descriptions = []
+            beam_sizes = [3, 5]
+            for beam_size in beam_sizes:
+                inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
+                outputs = self.blip_model.generate(
+                    **inputs,
+                    max_length=50,
+                    num_beams=beam_size,
+                    min_length=10,
+                    temperature=0.7,
+                    top_p=0.9
+                )
+                desc = self.blip_processor.decode(outputs[0], skip_special_tokens=True)
+                descriptions.append(desc)
             
-            # Übersetze die Beschreibung ins Deutsche
+            # Wähle die beste Beschreibung basierend auf Länge und Qualität
+            best_description = max(descriptions, key=lambda x: len(x.split()))
+            
+            # Übersetze und verbessere die Beschreibung
             try:
                 translator = GoogleTranslator(source='en', target='de')
-                description = translator.translate(description)
+                translated = translator.translate(best_description)
+                
+                # Verbessere die übersetzte Beschreibung
+                if not translated.startswith("Das Bild zeigt"):
+                    translated = f"Das Bild zeigt {translated[0].lower()}{translated[1:]}"
+                    
+                # Entferne redundante Formulierungen
+                translated = re.sub(r'man kann sehen,?\s+', '', translated, flags=re.IGNORECASE)
+                translated = re.sub(r'es ist zu sehen,?\s+', '', translated, flags=re.IGNORECASE)
+                
+                return translated
             except Exception as e:
-                print(f"Fehler bei der Übersetzung: {str(e)}")
-            
-            return description
+                print(f"Übersetzungsfehler: {str(e)}")
+                return best_description
         except Exception as e:
-            print(f"Fehler bei der Bildbeschreibung mit BLIP: {str(e)}")
+            print(f"BLIP-Fehler: {str(e)}")
             return "Keine Beschreibung verfügbar"
 
     def calculate_clip_similarity(self, image, text):
@@ -183,104 +237,147 @@ class MultimodalSummarizer:
             float: Ähnlichkeitswert zwischen 0 und 1
         """
         try:
-            # Bild vorverarbeiten
-            image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
+            if not text or len(text.strip()) < self.MIN_TEXT_LENGTH:
+                return 0.0
+                
+            # Teile langen Text in Chunks für bessere Verarbeitung
+            chunks = [text[i:i+77] for i in range(0, len(text), 77)]
+            similarities = []
             
-            # Text vorverarbeiten
-            text_input = clip.tokenize([text]).to(self.device)
+            for chunk in chunks:
+                image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
+                text_input = clip.tokenize([chunk]).to(self.device)
+                
+                with torch.no_grad():
+                    image_features = self.clip_model.encode_image(image_input)
+                    text_features = self.clip_model.encode_text(text_input)
+                    
+                    # Normalisiere Features
+                    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                    text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                    
+                    similarity = (image_features @ text_features.T).item()
+                    similarities.append((similarity + 1) / 2)
             
-            with torch.no_grad():
-                # Berechne Features
-                image_features = self.clip_model.encode_image(image_input)
-                text_features = self.clip_model.encode_text(text_input)
-                
-                # Normalisiere Features
-                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-                
-                # Berechne Ähnlichkeit
-                similarity = (image_features @ text_features.T).item()
-                
-                # Konvertiere zu einem Wert zwischen 0 und 1
-                similarity = (similarity + 1) / 2
-                
-            return similarity
+            # Verwende den höchsten Ähnlichkeitswert
+            return max(similarities) if similarities else 0.0
+            
         except Exception as e:
-            print(f"Fehler bei der CLIP-Ähnlichkeitsberechnung: {str(e)}")
+            print(f"CLIP-Fehler: {str(e)}")
             return 0.0
 
     def process_multiple_slides(self, file_path, start_slide=0, max_slides=1):
+        """
+        Verarbeitet mehrere Folien und erstellt eine verbesserte Zusammenfassung
+        """
+        newline = os.linesep
         try:
             slides_content = []
+            
+            # Extrahiere Folieninhalte
             for slide_number in range(start_slide, start_slide + max_slides):
                 try:
                     slide_image, slide_text = self.extract_slide_content(file_path, slide_number)
+                    # Speichere das Bild für spätere Referenz
+                    slide_image.save(f"slide_{slide_number}.png")
                     slides_content.append((slide_image, slide_text))
                 except IndexError:
-                    print(f"Folie {slide_number} existiert nicht in der Datei.")
+                    print(f"Folie {slide_number} existiert nicht.")
                     break
+                except Exception as e:
+                    print(f"Fehler bei Folie {slide_number}: {str(e)}")
+                    continue
 
             if not slides_content:
                 raise ValueError("Keine Folien zum Verarbeiten gefunden.")
 
-            # Separate images and texts
+            # Extrahiere Bilder und Texte
             images = [content[0] for content in slides_content]
-            texts = [content[1] for content in slides_content]
+            texts = [self._clean_and_validate_text(content[1]) or "" for content in slides_content]
 
-             # Verarbeite die Bilder mit BLIP
-            image_descriptions = [self._describe_image_with_blip(image) or "Keine Bildbeschreibung verfügbar" for image in images]
-
-            # Berechne CLIP-Ähnlichkeiten
-            clip_similarities = []
-            for i in range(len(images)):
-                if texts[i].strip():  # Nur wenn Text vorhanden ist
-                    similarity = self.calculate_clip_similarity(images[i], texts[i])
-                    clip_similarities.append(similarity)
-                else:
-                    clip_similarities.append(0.0)
-
-            # Verarbeite Flamingo nur für die Folien mit Text
+            # Verarbeite Bildbeschreibungen und Flamingo parallel
+            image_descriptions = []
             flamingo_summaries = []
-            for i, text in enumerate(texts):
-                if text.strip():  # Wenn Text vorhanden ist
-                    flamingo_summaries.append(None)  # Flamingo wird später die Zusammenfassung generieren
-                else:  # Wenn kein Text vorhanden ist
-                    flamingo_summaries.append("Keine Textzusammenfassung verfügbar")
 
-            # Verarbeite Flamingo in einem Batch und stelle sicher, dass eine gültige Ausgabe vorhanden ist
-            try:
-                final_flamingo_summaries = self._process_flamingo_batch(images, texts)
-                if final_flamingo_summaries is None:
-                    final_flamingo_summaries = ["Fehlerhafte Zusammenfassung" for _ in images]  # Fehlerbehandlung
-            except Exception as e:
-                print(f"Fehler bei der Verarbeitung von Flamingo: {str(e)}")
-                final_flamingo_summaries = ["Fehlerhafte Zusammenfassung" for _ in images]  # Fehlerbehandlung
+            for i, (image, text) in enumerate(zip(images, texts)):
+                # Generiere Bildbeschreibung
+                description = self._describe_image_with_blip(image)
+                image_descriptions.append(description)
 
-            # Kombiniere die Ergebnisse
-            combined_summaries = []
-            for i in range(len(images)):
-                summary = ""
-                if texts[i].strip():  # Nur wenn tatsächlich Text vorhanden ist
-                    if final_flamingo_summaries[i] != "Fehlerhafte Zusammenfassung" and final_flamingo_summaries[i]:
-                        if self.text_cleaner.is_valid_text(texts[i]):
-                            summary = f"{texts[i]}"
-                        combined_summaries.append(summary)
+                # Verarbeite Text mit Flamingo, falls vorhanden
+                if text and len(text.strip()) >= self.MIN_TEXT_LENGTH:
+                    flamingo_summary = None  # Wird später in Batch verarbeitet
+                else:
+                    flamingo_summary = ""
+                flamingo_summaries.append(flamingo_summary)
 
-            # Finalisiere die Zusammenfassung mit BART
-            final_summaries = [self._generate_bart_summary(summary) for summary in combined_summaries]
+            # Batch-Verarbeitung mit Flamingo für alle Folien mit Text
+            slides_with_text = [(i, img, txt) for i, (img, txt) in enumerate(zip(images, texts)) 
+                            if txt and len(txt.strip()) >= self.MIN_TEXT_LENGTH]
+            
+            if slides_with_text:
+                text_indices, text_images, text_contents = zip(*slides_with_text)
+                try:
+                    batch_summaries = self._process_flamingo_batch(text_images, text_contents)
+                    if batch_summaries:
+                        for idx, summary in zip(text_indices, batch_summaries):
+                            flamingo_summaries[idx] = self._post_process_summary(summary)
+                except Exception as e:
+                    print(f"Fehler bei Flamingo-Batch-Verarbeitung: {str(e)}")
 
-            processed_slides = [
-                {
-                    'original_text': texts[i],
-                    'image_description': image_descriptions[i],
-                    'summary': final_summaries[i],
+            # Verarbeite alle Folien
+            processed_slides = []
+            for i, (image, text, image_desc, flamingo_summary) in enumerate(
+                zip(images, texts, image_descriptions, flamingo_summaries)
+            ):
+                # Erstelle BART-Zusammenfassung für Text
+                text_summary = ""
+                if text and len(text.strip()) >= self.MIN_TEXT_LENGTH:
+                    if flamingo_summary:
+                        # Nutze Flamingo-Zusammenfassung als Basis für BART
+                        text_summary = self._generate_bart_summary(flamingo_summary)
+                    else:
+                        # Fallback auf direkten Text
+                        text_summary = self._generate_bart_summary(text)
+
+                # Kombiniere Zusammenfassungen
+                final_summary_parts = []
+                
+                # Füge Text-Zusammenfassung hinzu
+                if text_summary:
+                    final_summary_parts.append(text_summary)
+                
+                # Füge Bildbeschreibung hinzu
+                if image_desc and image_desc != "Keine Beschreibung verfügbar":
+                    if not any(image_desc.lower() in part.lower() for part in final_summary_parts):
+                        final_summary_parts.append(image_desc)
+                
+                # Erstelle finale Zusammenfassung
+                combined_summary = f"{newline}{newline}".join(final_summary_parts)
+                
+                # Berechne CLIP-Ähnlichkeit nur wenn es sinnvolle Inhalte gibt
+                clip_similarity = 0.0
+                if combined_summary:
+                    clip_similarity = self.calculate_clip_similarity(image, combined_summary)
+                    
+                    # Falls Ähnlichkeit zu niedrig, versuche alternative Zusammenfassung
+                    if clip_similarity < self.MIN_CONFIDENCE_THRESHOLD and text:
+                        alternative_summary = self._generate_bart_summary(text)
+                        alternative_similarity = self.calculate_clip_similarity(image, alternative_summary)
+                        
+                        if alternative_similarity > clip_similarity:
+                            combined_summary = alternative_summary
+                            clip_similarity = alternative_similarity
+
+                processed_slides.append({
+                    'original_text': text or "",
+                    'image_description': image_desc,
+                    'summary': combined_summary,
                     'image_path': f"slide_{start_slide + i}.png",
-                    'clip_similarity': clip_similarities[i]
-                }
-                for i in range(len(images))
-            ]
+                    'clip_similarity': clip_similarity
+                })
 
-            # Formatierte Gesamtausgabe
+            # Erstelle Gesamtzusammenfassung
             comprehensive_summary = self._generate_comprehensive_summary(processed_slides)
 
             return {
@@ -293,34 +390,100 @@ class MultimodalSummarizer:
             return None
 
     def _generate_comprehensive_summary(self, processed_slides):
-        # Verwende os.linesep für plattformübergreifende Konsistenz
-        import os
+        """
+        Erstellt eine verbesserte Gesamtzusammenfassung aller Folien
+        """
         newline = os.linesep
-
-        # Überschrift der Zusammenfassung
         sections = [f"Zusammenfassung der Folien{newline}", "=" * 30 + newline]
 
         for i, slide in enumerate(processed_slides):
-            # Abschnitt für jede Folie
-            sections.append(f"{newline}Folie {i + 1}{newline}")
-            sections.append("-" * 10 + newline)
+            # Füge nur Folien mit relevanten Inhalten hinzu
+            if slide['summary'] or slide['image_description']:
+                sections.append(f"{newline}Folie {i + 1}{newline}")
+                sections.append("-" * 10 + newline)
 
-            # Bildbeschreibung
-            if slide['image_description']:
-                sections.append(f"Bildbeschreibung:{newline}{slide['image_description']}{newline}")
+                # Füge Zusammenfassung hinzu
+                if slide['summary']:
+                    sections.append(f"{slide['summary']}{newline}")
 
-            # Text-Bild-Ähnlichkeit
-            sections.append(f"Text-Bild-Ähnlichkeit:{newline}{slide['clip_similarity']:.1%}{newline}")
+                # Füge Ähnlichkeitswert nur hinzu, wenn er signifikant ist
+                if slide['clip_similarity'] >= self.MIN_CONFIDENCE_THRESHOLD:
+                    sections.append(
+                        f"Text-Bild-Übereinstimmung: {slide['clip_similarity']:.1%}{newline}"
+                    )
 
-            # Textzusammenfassung
-            if slide['summary']:
-                sections.append(f"Textzusammenfassung:{newline}{slide['summary']}{newline}")
+                sections.append(newline)
 
-            # Leerzeile zwischen Folien
-            sections.append(newline)
+        # Wenn keine relevanten Inhalte gefunden wurden
+        if len(sections) <= 2:
+            sections.append(f"{newline}Keine relevanten Inhalte in den Folien gefunden.{newline}")
 
-        # Verarbeite alle Teile und füge sie zu einem String zusammen
         return "".join(sections)
+
+    def _clean_flamingo_summary(self, text):
+        """
+        Bereinigt und formatiert die Flamingo-Zusammenfassung.
+        """
+        if not text or text == "Fehlerhafte Zusammenfassung":
+            return text
+
+        # Entferne mehrfache Leerzeichen
+        text = ' '.join(text.split())
+        
+        # Behandle Aufzählungen
+        lines = text.split('.')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Prüfe, ob es sich um eine Aufzählung handelt
+            if any(line.startswith(marker) for marker in ['•', '-', '* ']):
+                # Füge einen Punkt am Ende hinzu, wenn keiner vorhanden ist
+                if not line.endswith('.'):
+                    line += '.'
+                cleaned_lines.append(line)
+            else:
+                # Füge einen Punkt am Ende hinzu, wenn keiner vorhanden ist
+                if not line.endswith('.'):
+                    line += '.'
+                # Stelle sicher, dass der erste Buchstabe groß geschrieben ist
+                line = line[0].upper() + line[1:] if line else line
+                cleaned_lines.append(line)
+        
+        return ' '.join(cleaned_lines)
+
+
+    def _post_process_summary(self, summary):
+        """
+        Nachbearbeitung der Zusammenfassungen für bessere Qualität
+        """
+        if not summary or len(summary) < self.MIN_TEXT_LENGTH:
+            return None
+            
+        # Entferne häufige Probleme
+        summary = re.sub(r'\b(\w+)(\s+\1\b)+', r'\1', summary)  # Entferne Wortwiederholungen
+        summary = re.sub(r'(?i)\b(das bild zeigt\s+)+', 'Das Bild zeigt ', summary)  # Normalisiere Bildverweise
+        
+        # Kürze zu lange Zusammenfassungen
+        if len(summary) > self.MAX_SUMMARY_LENGTH:
+            sentences = re.split(r'[.!?]+', summary)
+            shortened = []
+            current_length = 0
+            for sentence in sentences:
+                if current_length + len(sentence) > self.MAX_SUMMARY_LENGTH:
+                    break
+                shortened.append(sentence.strip())
+                current_length += len(sentence)
+            summary = '. '.join(shortened) + '.'
+        
+        # Stelle sicher, dass die Zusammenfassung mit einem Satzzeichen endet
+        if not summary.rstrip()[-1] in '.!?':
+            summary += '.'
+            
+        return summary.strip()
 
     def _generate_bart_summary(self, text):
         """
@@ -337,6 +500,8 @@ class MultimodalSummarizer:
                 min_length=40,
                 length_penalty=2.0,
                 num_beams=4,
+                no_repeat_ngram_size=3,  # Verhindert Wiederholungen von Phrasen
+                early_stopping=True
             )
             summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
             return self.text_cleaner.clean_text(summary)
@@ -365,36 +530,54 @@ class MultimodalSummarizer:
 
     def _process_flamingo_batch(self, images, texts):
         try:
+            # Bereite Eingaben vor
             image_tensors = [self.flamingo_image_processor(image).unsqueeze(0).to(self.device) for image in images]
             vision_x = torch.cat([tensor.unsqueeze(0).unsqueeze(0) for tensor in image_tensors], dim=0)
-
-            contexts = [f"{text}" for text in texts]
+            
+            # Verbessere Kontext für bessere Zusammenfassungen
+            contexts = []
+            for text in texts:
+                cleaned_text = self._clean_and_validate_text(text)
+                if cleaned_text:
+                    prompt = f"{cleaned_text}"
+                    contexts.append(prompt)
+                else:
+                    contexts.append("Beschreibung des wesentlichen Inhalts des Bildes.")
+            
             tokenizer_outputs = self.flamingo_tokenizer(
                 contexts,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=1024,
-                padding_side='left',   # Ensure left padding
+                padding_side='left',
             )
-            lang_x = tokenizer_outputs.input_ids.to(self.device)
-            attention_mask = tokenizer_outputs.attention_mask.to(self.device)
-
+            
+            # Generiere Zusammenfassungen mit verbesserten Parametern
             outputs = self.flamingo_model.generate(
                 vision_x=vision_x,
-                lang_x=lang_x,
-                attention_mask=attention_mask,
+                lang_x=tokenizer_outputs.input_ids.to(self.device),
+                attention_mask=tokenizer_outputs.attention_mask.to(self.device),
                 max_new_tokens=100,
                 do_sample=True,
+                num_beams=5,
+                no_repeat_ngram_size=3,
+                length_penalty=1.5,
                 top_k=50,
-                num_beams=4
             )
-            flamingo_summaries = [
-                self.flamingo_tokenizer.decode(output, skip_special_tokens=True) for output in outputs
-            ]
+            
+            # Nachbearbeitung der Zusammenfassungen
+            flamingo_summaries = []
+            for output in outputs:
+                summary = self.flamingo_tokenizer.decode(output, skip_special_tokens=True)
+                # Bereinige und strukturiere die Zusammenfassung
+                summary = self._post_process_summary(summary)
+                flamingo_summaries.append(summary)
+                
             return flamingo_summaries
+            
         except Exception as e:
-            print(f"Fehler bei der Verarbeitung von Flamingo-Batches: {str(e)}")
+            print(f"Flamingo-Fehler: {str(e)}")
             return None
 
     def summarize_text(self, text, max_length=150, chunk_size=800):
