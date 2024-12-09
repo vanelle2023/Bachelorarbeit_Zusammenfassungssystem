@@ -160,7 +160,7 @@ class MultimodalSummarizer:
         # Add minimum confidence thresholds
         self.MIN_CONFIDENCE_THRESHOLD = 0.3
         self.MIN_TEXT_LENGTH = 20
-        self.MAX_SUMMARY_LENGTH = 500
+        self.MAX_SUMMARY_LENGTH = 300
     
     def _clean_and_validate_text(self, text):
         """
@@ -643,7 +643,7 @@ class MultimodalSummarizer:
         
         # Bilder aus der PDF-Seite extrahieren
         images = []
-        image_list = page.get_images()
+        image_list = page.get_images(full=True)
         
         for img_index, img in enumerate(image_list):
             try:
@@ -663,8 +663,11 @@ class MultimodalSummarizer:
         
         doc.close()
         
-        # Wenn Bilder gefunden wurden, gib das erste zurück, sonst ein DummyImage
-        representative_image = images[0] if images else DummyImage()
+        # Bewerte die Relevanz der Bilder
+        relevant_images = self._filter_relevant_images(images)
+        
+        # Gib das relevanteste Bild zurück oder ein DummyImage
+        representative_image = relevant_images[0] if relevant_images else DummyImage()
         return representative_image, self.text_cleaner.clean_text(text.strip())
 
     def _extract_from_pptx(self, file_path, slide_number):
@@ -698,9 +701,32 @@ class MultimodalSummarizer:
                     print(f"Fehler beim Extrahieren des PPTX-Bildes: {e}")
                     continue
         
-        # Wenn Bilder gefunden wurden, gib das erste zurück, sonst ein DummyImage
-        representative_image = images[0] if images else DummyImage()
+        # Bewerte die Relevanz der Bilder
+        relevant_images = self._filter_relevant_images(images)
+        
+        # Gib das relevanteste Bild zurück oder ein DummyImage
+        representative_image = relevant_images[0] if relevant_images else DummyImage()
         return representative_image, self.text_cleaner.clean_text(text.strip())
+
+    def _filter_relevant_images(self, images):
+        """
+        Bewertet Bilder basierend auf Größe, Position und anderen Kriterien.
+        """
+        relevant_images = []
+        for image in images:
+            width, height = image.size
+            
+            # Ignoriere zu kleine Bilder (z. B. Logos)
+            if width * height < 5000:  # Schwellenwert anpassen
+                continue
+            
+            # Optionale weitere Kriterien hinzufügen, z. B. Position oder Ähnlichkeit zum Text
+            relevant_images.append(image)
+        
+        # Sortiere nach Größe (größere Bilder sind oft relevanter)
+        relevant_images.sort(key=lambda img: img.size[0] * img.size[1], reverse=True)
+        return relevant_images
+
 
 # Globale Instanz des Summarizers
 summarizer = MultimodalSummarizer()
