@@ -19,6 +19,8 @@ import re
 from typing import Optional
 import shutil
 from deep_translator import GoogleTranslator
+import fitz
+import io
 
 # FastAPI App initialisieren
 app = FastAPI(
@@ -44,6 +46,11 @@ UPLOAD_DIR = "uploads"
 TEMP_DIR = "temp"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+class DummyImage:
+    """Eine Dummy-Klasse, die save() aufrufe ignoriert"""
+    def save(self, *args, **kwargs):
+        pass  # Tue nichts, wenn save aufgerufen wird
 
  # Klasse zur Textbereinigung und Anpassung
 class TextCleaner:
@@ -153,7 +160,7 @@ class MultimodalSummarizer:
         # Add minimum confidence thresholds
         self.MIN_CONFIDENCE_THRESHOLD = 0.3
         self.MIN_TEXT_LENGTH = 20
-        self.MAX_SUMMARY_LENGTH = 200
+        self.MAX_SUMMARY_LENGTH = 500
     
     def _clean_and_validate_text(self, text):
         """
@@ -619,37 +626,81 @@ class MultimodalSummarizer:
 
     def extract_slide_content(self, file_path, slide_number=0):
         file_extension = os.path.splitext(file_path)[1].lower()
-
+        
         if file_extension == '.pdf':
-            images = convert_from_path(file_path)
-            slide_image = images[slide_number]
-            custom_config = r'--oem 3 --psm 6 -l deu'
-            text = pytesseract.image_to_string(slide_image, config=custom_config)
-            slide_image.save(f"slide_{slide_number}.png")
-
+            return self._extract_from_pdf(file_path, slide_number)
         elif file_extension in ['.pptx', '.ppt']:
-            prs = Presentation(file_path)
-            slide = prs.slides[slide_number]
-            text = ""
-            for shape in slide.shapes:
-                if hasattr(shape, "text"):
-                    text += shape.text + "\n"
-
-            # Folienbild exportieren
-            slide_image = self._extract_slide_image(slide)
-            slide_image.save(f"slide_{slide_number}.png")
+            return self._extract_from_pptx(file_path, slide_number)
         else:
             raise ValueError("Nicht unterstütztes Dateiformat")
 
-        text = self.text_cleaner.clean_text(text)
-        return slide_image, text.strip()
+    def _extract_from_pdf(self, file_path, slide_number):
+        doc = fitz.open(file_path)
+        page = doc[slide_number]
+        
+        # Text direkt aus PDF extrahieren
+        text = page.get_text()
+        
+        # Bilder aus der PDF-Seite extrahieren
+        images = []
+        image_list = page.get_images()
+        
+        for img_index, img in enumerate(image_list):
+            try:
+                xref = img[0]
+                base_image = doc.extract_image(xref)
+                image_bytes = base_image["image"]
+                
+                # Bytes in PIL Image konvertieren
+                image = Image.open(io.BytesIO(image_bytes))
+                images.append(image)
+                
+                # Bild speichern
+                image.save(f"slide_{slide_number}_image_{img_index}.png")
+            except Exception as e:
+                print(f"Fehler beim Extrahieren des PDF-Bildes: {e}")
+                continue
+        
+        doc.close()
+        
+        # Wenn Bilder gefunden wurden, gib das erste zurück, sonst ein DummyImage
+        representative_image = images[0] if images else DummyImage()
+        return representative_image, self.text_cleaner.clean_text(text.strip())
 
-    def _extract_slide_image(self, slide):
-        temp_img_path = "temp_slide.png"
-        slide.export(temp_img_path)
-        image = Image.open(temp_img_path)
-        os.remove(temp_img_path)
-        return image
+    def _extract_from_pptx(self, file_path, slide_number):
+        prs = Presentation(file_path)
+        slide = prs.slides[slide_number]
+        
+        # Text direkt aus Shapes extrahieren
+        text = ""
+        images = []
+        
+        for shape in slide.shapes:
+            # Text aus Textboxen extrahieren
+            if hasattr(shape, "text"):
+                text += shape.text + "\n"
+            
+            # Bilder extrahieren
+            if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+                try:
+                    image_stream = io.BytesIO()
+                    image = shape.image
+                    image_bytes = image.blob
+                    image_stream.write(image_bytes)
+                    image_stream.seek(0)
+                    
+                    image = Image.open(image_stream)
+                    images.append(image)
+                    
+                    # Einzelne Bilder speichern
+                    image.save(f"slide_{slide_number}_image_{len(images)-1}.png")
+                except Exception as e:
+                    print(f"Fehler beim Extrahieren des PPTX-Bildes: {e}")
+                    continue
+        
+        # Wenn Bilder gefunden wurden, gib das erste zurück, sonst ein DummyImage
+        representative_image = images[0] if images else DummyImage()
+        return representative_image, self.text_cleaner.clean_text(text.strip())
 
 # Globale Instanz des Summarizers
 summarizer = MultimodalSummarizer()
