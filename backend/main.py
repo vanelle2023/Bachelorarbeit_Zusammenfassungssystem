@@ -66,40 +66,52 @@ class TextCleaner:
     import re
 
     def clean_text(self, text):
-        # Entferne sehr kurze "Wörter" und offensichtliche OCR-Fehler
-        words = text.split()
+        """
+        Kombinierte Methode zur Textbereinigung und Validierung.
+        Entfernt störende Zeichen und filtert unerwünschte Wörter.
+        
+        Args:
+            text (str): Zu bereinigender Text
+            
+        Returns:
+            str: Bereinigter Text oder None wenn Text ungültig
+        """
+        if not text or not text.strip():
+            return None
+            
+        # Normalisiere Whitespace und entferne die meisten Sonderzeichen
+        cleaned = re.sub(r'\s+', ' ', text)
+        cleaned = re.sub(r'[^\w\s.,!?()-]', '', cleaned)
+        
+        # Wortweise Filterung
+        words = cleaned.split()
         filtered_words = []
         
         for word in words:
-            # Ignoriere sehr kurze Wörter außer bestimmten Ausnahmen
-            if len(word) <= 1 and word.lower() not in ['a', 'i', 'o', '&']:
+            # Überspringe Wörter wenn:
+            # - Zu kurz (außer bestimmte Ausnahmen)
+            # - Reine Zahlen
+            if (len(word) < 3 and 
+                not word.lower() in ['in', 'an', 'zu', 'um', 'a', 'i', 'o', '&']):
+                continue
+            if word.isdigit():
                 continue
                 
-            # Entferne Wörter mit zu vielen Großbuchstaben in der Mitte
+            # Prüfe auf zu viele Großbuchstaben in der Mitte des Wortes
             if len(word) > 3:
                 mid_caps = sum(1 for c in word[1:] if c.isupper())
                 if mid_caps > len(word) / 2:
                     continue
-                    
-            # Entferne "Wörter" mit zu vielen Sonderzeichen
-            special_chars = sum(1 for c in word if not c.isalnum())
-            if special_chars > len(word) / 3:
-                continue
-                
+            
             filtered_words.append(word)
         
-        text = ' '.join(filtered_words)
+        cleaned = ' '.join(filtered_words)
         
-        # Weitere Bereinigung
-        text = re.sub(r'[^\w\s.,!?]', '', text) # Entferne nicht alphanumerische Zeichen außer Satzzeichen
-        text = re.sub(r'\s+', ' ', text)  # Mehrfache Leerzeichen entfernen
-        text = text.strip()
-        
-        # Wenn der Text zu "chaotisch" erscheint, ignoriere ihn
-        if len(text.split()) < 3 or len(text) < 10:
-            return ""
+        # Finale Validierung
+        if len(cleaned.split()) < 3 or len(cleaned) < 10:
+            return None
             
-        return text
+        return cleaned.strip()
 
     def is_valid_text(self, text):
         """
@@ -160,35 +172,7 @@ class MultimodalSummarizer:
         # Add minimum confidence thresholds
         self.MIN_CONFIDENCE_THRESHOLD = 0.3
         self.MIN_TEXT_LENGTH = 20
-        self.MAX_SUMMARY_LENGTH = 300
-    
-    def _clean_and_validate_text(self, text):
-        """
-        Verbesserte Textbereinigung und Validierung
-        """
-        if not text or len(text.strip()) < self.MIN_TEXT_LENGTH:
-            return None
-            
-        # Entferne OCR-Artefakte und störende Zeichen
-        cleaned = re.sub(r'\s+', ' ', text)  # Normalisiere Whitespace
-        cleaned = re.sub(r'[^\w\s.,!?()-]', '', cleaned)  # Behalte nur sinnvolle Zeichen
-        
-        # Entferne alleinstehende Zahlen und kurze Zeichenfolgen
-        words = cleaned.split()
-        filtered_words = []
-        for word in words:
-            # Ignoriere reine Zahlen und zu kurze "Wörter"
-            if word.isdigit() or (len(word) < 3 and not word.lower() in ['in', 'an', 'zu', 'um']):
-                continue
-            filtered_words.append(word)
-        
-        cleaned = ' '.join(filtered_words)
-        
-        # Prüfe auf Mindestqualität
-        if len(cleaned.split()) < 3:
-            return None
-            
-        return cleaned.strip()
+        self.MAX_SUMMARY_LENGTH = 500
 
     def _describe_image_with_blip(self, image):
         try:
@@ -275,7 +259,8 @@ class MultimodalSummarizer:
 
     def process_multiple_slides(self, file_path, start_slide=0, max_slides=1):
         """
-        Verarbeitet mehrere Folien und erstellt eine verbesserte Zusammenfassung
+        Verarbeitet mehrere Folien und erstellt eine Zusammenfassung
+        mit separaten CLIP-Scores für Bildbeschreibung und Textzusammenfassung
         """
         newline = os.linesep
         try:
@@ -285,7 +270,6 @@ class MultimodalSummarizer:
             for slide_number in range(start_slide, start_slide + max_slides):
                 try:
                     slide_image, slide_text = self.extract_slide_content(file_path, slide_number)
-                    # Speichere das Bild für spätere Referenz
                     slide_image.save(f"slide_{slide_number}.png")
                     slides_content.append((slide_image, slide_text))
                 except IndexError:
@@ -300,91 +284,66 @@ class MultimodalSummarizer:
 
             # Extrahiere Bilder und Texte
             images = [content[0] for content in slides_content]
-            texts = [self._clean_and_validate_text(content[1]) or "" for content in slides_content]
+            texts = [self.text_cleaner.clean_text(content[1]) or "" for content in slides_content]
 
-            # Verarbeite Bildbeschreibungen und Flamingo parallel
-            image_descriptions = []
-            flamingo_summaries = []
-
-            for i, (image, text) in enumerate(zip(images, texts)):
-                # Generiere Bildbeschreibung
-                description = self._describe_image_with_blip(image)
-                image_descriptions.append(description)
-
-                # Verarbeite Text mit Flamingo, falls vorhanden
-                if text and len(text.strip()) >= self.MIN_TEXT_LENGTH:
-                    flamingo_summary = None  # Wird später in Batch verarbeitet
-                else:
-                    flamingo_summary = ""
-                flamingo_summaries.append(flamingo_summary)
-
-            # Batch-Verarbeitung mit Flamingo für alle Folien mit Text
-            slides_with_text = [(i, img, txt) for i, (img, txt) in enumerate(zip(images, texts)) 
-                            if txt and len(txt.strip()) >= self.MIN_TEXT_LENGTH]
-            
-            if slides_with_text:
-                text_indices, text_images, text_contents = zip(*slides_with_text)
-                try:
-                    batch_summaries = self._process_flamingo_batch(text_images, text_contents)
-                    if batch_summaries:
-                        for idx, summary in zip(text_indices, batch_summaries):
-                            flamingo_summaries[idx] = self._post_process_summary(summary)
-                except Exception as e:
-                    print(f"Fehler bei Flamingo-Batch-Verarbeitung: {str(e)}")
-
-            # Verarbeite alle Folien
+            # Verarbeite jede Folie einzeln
             processed_slides = []
-            for i, (image, text, image_desc, flamingo_summary) in enumerate(
-                zip(images, texts, image_descriptions, flamingo_summaries)
-            ):
-                # Erstelle BART-Zusammenfassung für Text
-                text_summary = ""
+            for i, (image, text) in enumerate(zip(images, texts)):
+                # Initialisiere Scores und Zusammenfassungen
+                image_desc = None
+                text_summary = None
+                image_clip_score = 0.0
+                text_clip_score = 0.0
+                
+                # Verarbeite Bild, wenn vorhanden
+                if image:
+                    image_desc = self._describe_image_with_blip(image)
+                    if image_desc and image_desc != "Keine Beschreibung verfügbar":
+                        image_clip_score = self.calculate_clip_similarity(image, image_desc)
+                
+                # Verarbeite Text, wenn vorhanden
                 if text and len(text.strip()) >= self.MIN_TEXT_LENGTH:
+                    flamingo_summary = self._process_text_with_flamingo(text)
                     if flamingo_summary:
-                        # Nutze Flamingo-Zusammenfassung als Basis für BART
                         text_summary = self._generate_bart_summary(flamingo_summary)
-                    else:
-                        # Fallback auf direkten Text
-                        text_summary = self._generate_bart_summary(text)
+                        text_clip_score = self.calculate_clip_similarity(image, text_summary)
+                        
+                        # Falls Score zu niedrig, versuche direkten Text
+                        if text_clip_score < self.MIN_CONFIDENCE_THRESHOLD:
+                            alternative_summary = self._generate_bart_summary(text)
+                            alternative_score = self.calculate_clip_similarity(image, alternative_summary)
+                            if alternative_score > text_clip_score:
+                                text_summary = alternative_summary
+                                text_clip_score = alternative_score
 
                 # Kombiniere Zusammenfassungen
                 final_summary_parts = []
                 
                 # Füge Text-Zusammenfassung hinzu
                 if text_summary:
+                    final_summary_parts.append(f"Textzusammenfassung (CLIP-Score: {text_clip_score:.1%}):")
                     final_summary_parts.append(text_summary)
                 
                 # Füge Bildbeschreibung hinzu
                 if image_desc and image_desc != "Keine Beschreibung verfügbar":
                     if not any(image_desc.lower() in part.lower() for part in final_summary_parts):
+                        final_summary_parts.append(f"Bildbeschreibung (CLIP-Score: {image_clip_score:.1%}):")
                         final_summary_parts.append(image_desc)
                 
                 # Erstelle finale Zusammenfassung
                 combined_summary = f"{newline}{newline}".join(final_summary_parts)
-                
-                # Berechne CLIP-Ähnlichkeit nur wenn es sinnvolle Inhalte gibt
-                clip_similarity = 0.0
-                if combined_summary:
-                    clip_similarity = self.calculate_clip_similarity(image, combined_summary)
-                    
-                    # Falls Ähnlichkeit zu niedrig, versuche alternative Zusammenfassung
-                    if clip_similarity < self.MIN_CONFIDENCE_THRESHOLD and text:
-                        alternative_summary = self._generate_bart_summary(text)
-                        alternative_similarity = self.calculate_clip_similarity(image, alternative_summary)
-                        
-                        if alternative_similarity > clip_similarity:
-                            combined_summary = alternative_summary
-                            clip_similarity = alternative_similarity
 
                 processed_slides.append({
                     'original_text': text or "",
                     'image_description': image_desc,
+                    'image_clip_score': image_clip_score,
+                    'text_summary': text_summary,
+                    'text_clip_score': text_clip_score,
                     'summary': combined_summary,
-                    'image_path': f"slide_{start_slide + i}.png",
-                    'clip_similarity': clip_similarity
+                    'image_path': f"slide_{start_slide + i}.png"
                 })
 
-            # Erstelle Gesamtzusammenfassung
+            # Aktualisiere Gesamtzusammenfassung mit CLIP-Scores
             comprehensive_summary = self._generate_comprehensive_summary(processed_slides)
 
             return {
@@ -398,70 +357,32 @@ class MultimodalSummarizer:
 
     def _generate_comprehensive_summary(self, processed_slides):
         """
-        Erstellt eine verbesserte Gesamtzusammenfassung aller Folien
+        Erstellt eine Gesamtzusammenfassung aller Folien mit CLIP-Scores
         """
         newline = os.linesep
         sections = [f"Zusammenfassung der Folien{newline}", "=" * 30 + newline]
 
         for i, slide in enumerate(processed_slides):
-            # Füge nur Folien mit relevanten Inhalten hinzu
-            if slide['summary'] or slide['image_description']:
-                sections.append(f"{newline}Folie {i + 1}{newline}")
-                sections.append("-" * 10 + newline)
+            sections.append(f"{newline}Folie {i + 1}{newline}")
+            sections.append("-" * 10 + newline)
 
-                # Füge Zusammenfassung hinzu
-                if slide['summary']:
-                    sections.append(f"{slide['summary']}{newline}")
+            # Füge Textzusammenfassung mit Score hinzu
+            if slide.get('text_summary'):
+                sections.append(f"Text-Zusammenfassung (CLIP-Score: {slide['text_clip_score']:.1%}):{newline}")
+                sections.append(f"{slide['text_summary']}{newline}{newline}")
 
-                # Füge Ähnlichkeitswert nur hinzu, wenn er signifikant ist
-                if slide['clip_similarity'] >= self.MIN_CONFIDENCE_THRESHOLD:
-                    sections.append(
-                        f"Text-Bild-Übereinstimmung: {slide['clip_similarity']:.1%}{newline}"
-                    )
+            # Füge Bildbeschreibung mit Score hinzu
+            if slide.get('image_description') and slide['image_description'] != "Keine Beschreibung verfügbar":
+                sections.append(f"Bildbeschreibung (CLIP-Score: {slide['image_clip_score']:.1%}):{newline}")
+                sections.append(f"{slide['image_description']}{newline}")
 
-                sections.append(newline)
+            sections.append(newline)
 
         # Wenn keine relevanten Inhalte gefunden wurden
         if len(sections) <= 2:
             sections.append(f"{newline}Keine relevanten Inhalte in den Folien gefunden.{newline}")
 
         return "".join(sections)
-
-    def _clean_flamingo_summary(self, text):
-        """
-        Bereinigt und formatiert die Flamingo-Zusammenfassung.
-        """
-        if not text or text == "Fehlerhafte Zusammenfassung":
-            return text
-
-        # Entferne mehrfache Leerzeichen
-        text = ' '.join(text.split())
-        
-        # Behandle Aufzählungen
-        lines = text.split('.')
-        cleaned_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            # Prüfe, ob es sich um eine Aufzählung handelt
-            if any(line.startswith(marker) for marker in ['•', '-', '* ']):
-                # Füge einen Punkt am Ende hinzu, wenn keiner vorhanden ist
-                if not line.endswith('.'):
-                    line += '.'
-                cleaned_lines.append(line)
-            else:
-                # Füge einen Punkt am Ende hinzu, wenn keiner vorhanden ist
-                if not line.endswith('.'):
-                    line += '.'
-                # Stelle sicher, dass der erste Buchstabe groß geschrieben ist
-                line = line[0].upper() + line[1:] if line else line
-                cleaned_lines.append(line)
-        
-        return ' '.join(cleaned_lines)
-
 
     def _post_process_summary(self, summary):
         """
@@ -516,55 +437,28 @@ class MultimodalSummarizer:
             print(f"Fehler bei der BART-Zusammenfassung: {str(e)}")
             return ""
 
-    def _process_images_batch(self, images):
+    def _process_text_with_flamingo(self, text):
         try:
-            image_tensors = [self.clip_preprocess(image).unsqueeze(0) for image in images]
-            image_batch = torch.cat(image_tensors).to(self.device)
-            with torch.no_grad():
-                image_features = self.clip_model.encode_image(image_batch)
-            return image_features.cpu().numpy()
-        except Exception as e:
-            print(f"Fehler bei der Verarbeitung von Bild-Batches: {str(e)}")
-            return None
+            # Bereite Text vor
+            cleaned_text = self.text_cleaner.clean_text(text)
+            if not cleaned_text:
+                return None
 
-    def _process_texts_batch(self, texts):
-        try:
-            text_embeddings = self.sentence_model.encode(texts, convert_to_tensor=True)
-            return text_embeddings.cpu().numpy()
-        except Exception as e:
-            print(f"Fehler bei der Verarbeitung von Text-Batches: {str(e)}")
-            return None
-
-    def _process_flamingo_batch(self, images, texts):
-        try:
-            # Bereite Eingaben vor
-            image_tensors = [self.flamingo_image_processor(image).unsqueeze(0).to(self.device) for image in images]
-            vision_x = torch.cat([tensor.unsqueeze(0).unsqueeze(0) for tensor in image_tensors], dim=0)
+            prompt = f"{cleaned_text}"
             
-            # Verbessere Kontext für bessere Zusammenfassungen
-            contexts = []
-            for text in texts:
-                cleaned_text = self._clean_and_validate_text(text)
-                if cleaned_text:
-                    prompt = f"{cleaned_text}"
-                    contexts.append(prompt)
-                else:
-                    contexts.append("Beschreibung des wesentlichen Inhalts des Bildes.")
-            
-            tokenizer_outputs = self.flamingo_tokenizer(
-                contexts,
+            # Tokenisiere den Text
+            tokenizer_output = self.flamingo_tokenizer(
+                prompt,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=1024,
-                padding_side='left',
+                max_length=1024
             )
             
-            # Generiere Zusammenfassungen mit verbesserten Parametern
+            # Generiere Zusammenfassung
             outputs = self.flamingo_model.generate(
-                vision_x=vision_x,
-                lang_x=tokenizer_outputs.input_ids.to(self.device),
-                attention_mask=tokenizer_outputs.attention_mask.to(self.device),
+                lang_x=tokenizer_output.input_ids.to(self.device),
+                attention_mask=tokenizer_output.attention_mask.to(self.device),
                 max_new_tokens=100,
                 do_sample=True,
                 num_beams=5,
@@ -573,16 +467,10 @@ class MultimodalSummarizer:
                 top_k=50,
             )
             
-            # Nachbearbeitung der Zusammenfassungen
-            flamingo_summaries = []
-            for output in outputs:
-                summary = self.flamingo_tokenizer.decode(output, skip_special_tokens=True)
-                # Bereinige und strukturiere die Zusammenfassung
-                summary = self._post_process_summary(summary)
-                flamingo_summaries.append(summary)
+            # Dekodiere und verarbeite die Ausgabe
+            summary = self.flamingo_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            return self._post_process_summary(summary)
                 
-            return flamingo_summaries
-            
         except Exception as e:
             print(f"Flamingo-Fehler: {str(e)}")
             return None
