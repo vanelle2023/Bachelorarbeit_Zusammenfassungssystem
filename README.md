@@ -109,6 +109,7 @@ Dieses System ermöglicht:
     ```
 
     Windows: Lade Poppler herunter und füge es zu deinem PATH hinzu.
+    
     macOS:
     ```
     brew install poppler
