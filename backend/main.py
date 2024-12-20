@@ -300,46 +300,19 @@ class MultimodalSummarizer:
                     image_desc = self._describe_image_with_blip(image)
                     if image_desc and image_desc != "Keine Beschreibung verfügbar":
                         image_clip_score = self.calculate_clip_similarity(image, image_desc)
-                
                 # Verarbeite Text, wenn vorhanden
-                if text and len(text.strip()) >= self.MIN_TEXT_LENGTH:
-                    flamingo_summary = self._process_text_with_flamingo(text)
+                if text and len(text.strip()) >= self.MIN_TEXT_LENGTH and image:
+                    flamingo_summary = self._process_with_flamingo(image, text)
                     if flamingo_summary:
                         text_summary = self._generate_bart_summary(flamingo_summary)
                         text_clip_score = self.calculate_clip_similarity(image, text_summary)
-                        
-                        # Falls Score zu niedrig, versuche direkten Text
-                        if text_clip_score < self.MIN_CONFIDENCE_THRESHOLD:
-                            alternative_summary = self._generate_bart_summary(text)
-                            alternative_score = self.calculate_clip_similarity(image, alternative_summary)
-                            if alternative_score > text_clip_score:
-                                text_summary = alternative_summary
-                                text_clip_score = alternative_score
 
-                # Kombiniere Zusammenfassungen
-                final_summary_parts = []
-                
-                # Füge Text-Zusammenfassung hinzu
-                if text_summary:
-                    final_summary_parts.append(f"Textzusammenfassung (CLIP-Score: {text_clip_score:.1%}):")
-                    final_summary_parts.append(text_summary)
-                
-                # Füge Bildbeschreibung hinzu
-                if image_desc and image_desc != "Keine Beschreibung verfügbar":
-                    if not any(image_desc.lower() in part.lower() for part in final_summary_parts):
-                        final_summary_parts.append(f"Bildbeschreibung (CLIP-Score: {image_clip_score:.1%}):")
-                        final_summary_parts.append(image_desc)
-                
-                # Erstelle finale Zusammenfassung
-                combined_summary = f"{newline}{newline}".join(final_summary_parts)
-
-                processed_slides.append({
+                    processed_slides.append({
                     'original_text': text or "",
                     'image_description': image_desc,
                     'image_clip_score': image_clip_score,
                     'text_summary': text_summary,
                     'text_clip_score': text_clip_score,
-                    'summary': combined_summary,
                     'image_path': f"slide_{start_slide + i}.png"
                 })
 
@@ -357,7 +330,7 @@ class MultimodalSummarizer:
 
     def _generate_comprehensive_summary(self, processed_slides):
         """
-        Erstellt eine Gesamtzusammenfassung aller Folien mit CLIP-Scores
+        Erstellt eine Gesamtzusammenfassung aller Folien, einschließlich hierarchischer Zusammenfassungen.
         """
         newline = os.linesep
         sections = [f"Zusammenfassung der Folien{newline}", "=" * 30 + newline]
@@ -366,15 +339,14 @@ class MultimodalSummarizer:
             sections.append(f"{newline}Folie {i + 1}{newline}")
             sections.append("-" * 10 + newline)
 
-            # Füge Textzusammenfassung mit Score hinzu
+            # Füge die Basissummen hinzu (Text und Bild)
             if slide.get('text_summary'):
                 sections.append(f"Text-Zusammenfassung (CLIP-Score: {slide['text_clip_score']:.1%}):{newline}")
                 sections.append(f"{slide['text_summary']}{newline}{newline}")
 
-            # Füge Bildbeschreibung mit Score hinzu
             if slide.get('image_description') and slide['image_description'] != "Keine Beschreibung verfügbar":
                 sections.append(f"Bildbeschreibung (CLIP-Score: {slide['image_clip_score']:.1%}):{newline}")
-                sections.append(f"{slide['image_description']}{newline}")
+                sections.append(f"{slide['image_description']}.{newline}")
 
             sections.append(newline)
 
@@ -429,7 +401,8 @@ class MultimodalSummarizer:
                 length_penalty=2.0,
                 num_beams=4,
                 no_repeat_ngram_size=3,  # Verhindert Wiederholungen von Phrasen
-                early_stopping=True
+                early_stopping=True,
+                temperature=0.7
             )
             summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
             return self.text_cleaner.clean_text(summary)
@@ -437,12 +410,17 @@ class MultimodalSummarizer:
             print(f"Fehler bei der BART-Zusammenfassung: {str(e)}")
             return ""
 
-    def _process_text_with_flamingo(self, text):
+    def _process_with_flamingo(self, image, text):
+
         try:
             # Bereite Text vor
             cleaned_text = self.text_cleaner.clean_text(text)
             if not cleaned_text:
                 return None
+
+            # Bereite Bild vor
+            image_tensor = self.flamingo_image_processor(image).unsqueeze(0).to(self.device)
+            vision_x = image_tensor.unsqueeze(0).unsqueeze(0)  # [batch_size=1, num_media=1, C, H, W]
 
             prompt = f"{cleaned_text}"
             
@@ -453,13 +431,14 @@ class MultimodalSummarizer:
                 padding=True,
                 truncation=True,
                 max_length=1024
-            )
+            ).to(self.device)
             
             # Generiere Zusammenfassung
             outputs = self.flamingo_model.generate(
-                lang_x=tokenizer_output.input_ids.to(self.device),
-                attention_mask=tokenizer_output.attention_mask.to(self.device),
-                max_new_tokens=100,
+                vision_x=vision_x,
+                lang_x=tokenizer_output.input_ids,
+                attention_mask=tokenizer_output.attention_mask,
+                max_new_tokens=150,
                 do_sample=True,
                 num_beams=5,
                 no_repeat_ngram_size=3,
@@ -474,43 +453,6 @@ class MultimodalSummarizer:
         except Exception as e:
             print(f"Flamingo-Fehler: {str(e)}")
             return None
-
-    def summarize_text(self, text, max_length=150, chunk_size=800):
-        """
-        Erstellt eine Zusammenfassung eines Textes. 
-        Wenn der Text zu lang ist, wird er in Abschnitte unterteilt und schrittweise zusammengefasst.
-        """
-        try:
-            # Text in handhabbare Teile aufteilen
-            if len(text) > chunk_size:
-                chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-            else:
-                chunks = [text]
-            
-            summaries = []
-            for chunk in chunks:
-                inputs = self.summarizer_tokenizer(chunk, max_length=1024, truncation=True, return_tensors="pt")
-                summary_ids = self.summarizer_model.generate(
-                    inputs["input_ids"],
-                    max_length=max_length,
-                    min_length=40,
-                    length_penalty=2.0,
-                    num_beams=4,
-                )
-                summary = self.summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-                summaries.append(summary)
-            
-            # Fasse die einzelnen Abschnitte erneut zusammen
-            combined_summary = " ".join(summaries)
-            if len(combined_summary) > chunk_size:
-                # Zweite Zusammenfassung, falls die kombinierte zu lang ist
-                return self.summarize_text(combined_summary, max_length=max_length)
-            return combined_summary
-        
-        except Exception as e:
-            print(f"Fehler bei der Textzusammenfassung: {str(e)}")
-            return ""
-
 
     def extract_slide_content(self, file_path, slide_number=0):
         file_extension = os.path.splitext(file_path)[1].lower()
