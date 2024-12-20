@@ -70,6 +70,8 @@ Dieses System ermöglicht:
   -  package.json # Node-Abhängigkeiten für das Frontend
 -  README.md # Projektdokumentation 
 
+---
+
 ## **Installation und Ausführung**
 
 ### **Voraussetzungen**
@@ -93,28 +95,38 @@ Dieses System ermöglicht:
    pip install transformers torch torchvision
    pip install sentence-transformers
    ```
-   Um das FastAPI-Backend zu starten, führen Sie den folgenden Befehl aus: uvicorn main:app --reload
+   Um das FastAPI-Backend zu starten, führen Sie den folgenden Befehl aus:
+   ``` 
+   uvicorn main:app --reload
+   ```
    **Hinweis:**
+
    **pdf2image** erfordert poppler-utils für die Konvertierung von PDF in Bilder: 
+
     Linux:
+    ```
+    sudo apt install poppler-utils
+    ```
+
+    Windows: Lade Poppler herunter und füge es zu deinem PATH hinzu.
+    macOS:
+    ```
+    brew install poppler
+    ```
+
+   **Spacy Sprachmodell (Deutsch):**
    ```
-   sudo apt install poppler-utils
+   python -m spacy download de_core_news_sm
    ```
-   Windows: Lade Poppler herunter und füge es zu deinem PATH hinzu.
-   macOS:
-   ```
-   brew install poppler
-   ```
-  **Spacy Sprachmodell (Deutsch):**
-  ```
-  python -m spacy download de_core_news_sm
-  ```
 2. **Frontend installieren**
 ```
 cd frontend/
 npm install
 npm run start
 ```
+
+---
+
 ## **Api-Endpunkte**
 
 1. **/get_slides_count/ (POST)**
@@ -136,6 +148,8 @@ Antwort: { "result": {...} }
 
 Beschreibung: Prüft, ob das Backend funktioniert.
 Antwort: { "status": "healthy" }
+
+---
 
 ## **Frontend-Funktionen:**
 
