@@ -22,52 +22,9 @@ from settings import TEMP_DIR  # Nutzung von temporären Dateien
 
 class DummyImage:
     """Eine Dummy-Klasse, die Flamingo-kompatibel ist"""
-    def __init__(self, channels=3, height=224, width=224):
-        self.channels = channels
-        self.height = height
-        self.width = width
-        # Erstelle einen leeren Tensor mit der richtigen Form
-        self.tensor = torch.zeros((channels, height, width))
         
     def save(self, *args, **kwargs):
         pass  # Tue nichts, wenn save aufgerufen wird
-        
-    def to(self, device):
-        return self  
-        
-    def unsqueeze(self, dim):
-        return self 
-        
-    def size(self, *args):
-        if len(args) == 0:
-            return (self.channels, self.height, self.width)
-        return self.size()[args[0]]
-        
-    @property
-    def shape(self):
-        return self.size()
-        
-    def __array__(self):
-        # Für NumPy Konvertierung
-        return self.tensor.numpy()
-        
-    def cuda(self):
-        return self
-        
-    def cpu(self):
-        return self
-        
-    def float(self):
-        return self
-        
-    def numpy(self):
-        return self.__array__()
-        
-    def permute(self, *args):
-        return self
-        
-    def contiguous(self):
-        return self
 
  # Klasse zur Textbereinigung und Anpassung
 class TextCleaner:
@@ -84,74 +41,35 @@ class TextCleaner:
 
     def clean_text(self, text):
         """
-        Kombinierte Methode zur Textbereinigung und Validierung.
-        Entfernt störende Zeichen und filtert unerwünschte Wörter.
-        
-        Args:
-            text (str): Zu bereinigender Text
-            
-        Returns:
-            str: Bereinigter Text oder None wenn Text ungültig
+        Weniger strenge Textbereinigung mit besserer Fehlerbehandlung
         """
-        if not text or not text.strip():
+        if not text:
             return None
             
-        # Normalisiere Whitespace und entferne die meisten Sonderzeichen
-        cleaned = re.sub(r'\s+', ' ', text)
-        cleaned = re.sub(r'[^\w\s.,!?()-]', '', cleaned)
+        # Basic Whitespace-Normalisierung
+        cleaned = ' '.join(text.split())
         
-        # Wortweise Filterung
+        # Entferne nur problematische Sonderzeichen
+        cleaned = re.sub(r'[^\w\s.,!?():\-–\'"]/]', ' ', cleaned)
+        
+        # Weniger strenge Wortfilterung
         words = cleaned.split()
         filtered_words = []
         
         for word in words:
-            # Überspringe Wörter wenn:
-            # - Zu kurz (außer bestimmte Ausnahmen)
-            # - Reine Zahlen
-            if (len(word) < 3 and 
-                not word.lower() in ['in', 'an', 'zu', 'um', 'a', 'i', 'o', '&']):
-                continue
-            if word.isdigit():
+            # Überspringe nur offensichtlich ungültige Wörter
+            if len(word) < 2 and not word.lower() in ['a', 'i', 'o', '&']:
                 continue
                 
-            # Prüfe auf zu viele Großbuchstaben in der Mitte des Wortes
-            if len(word) > 3:
-                mid_caps = sum(1 for c in word[1:] if c.isupper())
-                if mid_caps > len(word) / 2:
-                    continue
-            
             filtered_words.append(word)
         
         cleaned = ' '.join(filtered_words)
         
-        # Finale Validierung
-        if len(cleaned.split()) < 3 or len(cleaned) < 10:
+        # Minimale Längenprüfung
+        if len(cleaned.strip()) < 5:  # Reduziert von 10
             return None
             
         return cleaned.strip()
-
-    def is_valid_text(self, text):
-        """
-        Prüft, ob der Text gültig und sinnvoll ist.
-        """
-        if not text or len(text.strip()) < 10:
-            return False
-            
-        words = text.split()
-        if len(words) < 3:
-            return False
-            
-        # Prüfe auf zu viele Einzelbuchstaben
-        single_chars = sum(1 for word in words if len(word) == 1)
-        if len(words) > 0 and single_chars / len(words) > 0.3:
-            return False
-            
-        # Prüfe auf zu viele Sonderzeichen
-        special_chars = sum(1 for char in text if char in '.,!?')
-        if len(text) > 0 and special_chars / len(text) > 0.2:
-            return False
-            
-        return True
 
 class MultimodalSummarizer:
     def __init__(self):
@@ -187,13 +105,11 @@ class MultimodalSummarizer:
         # Ensure tokenizer uses left-padding for compatibility with decoder-only architectures
         self.flamingo_tokenizer.padding_side = 'left'
         # Add minimum confidence thresholds
-        self.MIN_CONFIDENCE_THRESHOLD = 0.3
-        self.MIN_TEXT_LENGTH = 20
+        self.MIN_CONFIDENCE_THRESHOLD = 0.1
+        self.MIN_TEXT_LENGTH = 10
         self.MAX_SUMMARY_LENGTH = 500
 
     def _describe_image_with_blip(self, image):
-        if not isinstance(image, (Image.Image, np.ndarray, torch.Tensor)):
-            return "Keine Beschreibung verfügbar"  # Standardantwort für nicht unterstützte Bildtypen
         try:
             # Generiere mehrere Beschreibungen mit unterschiedlichen Parametern
             descriptions = []
@@ -317,30 +233,34 @@ class MultimodalSummarizer:
                 # Verarbeite Bild, wenn vorhanden
                 if image:
                     image_desc = self._describe_image_with_blip(image)
+                    print(f"BLIP-Beschreibung: {image_desc}")
                     if image_desc and image_desc != "Keine Beschreibung verfügbar":
                         image_clip_score = self.calculate_clip_similarity(image, image_desc)
                 # Verarbeite Text, wenn vorhanden
                 if text and len(text.strip()) >= self.MIN_TEXT_LENGTH and image:
                     flamingo_summary = self._process_with_flamingo(image, text)
+                    print(f"Flamingo-Zusammenfassung: {flamingo_summary}")
                     if flamingo_summary:
                         text_summary = self._generate_bart_summary(flamingo_summary)
                         text_clip_score = self.calculate_clip_similarity(image, text_summary)
-                
-                if text_clip_score < self.MIN_CONFIDENCE_THRESHOLD:
-                    alternative_summary = self._generate_bart_summary(text)
-                    alternative_score = self.calculate_clip_similarity(image, alternative_summary)
-                    if alternative_score > text_clip_score:
-                        text_summary = alternative_summary
-                        text_clip_score = alternative_score
+                    else:
+                        alternative_summary = self._generate_bart_summary(text)
+                        alternative_score = self.calculate_clip_similarity(image, alternative_summary)
+                        if alternative_score > text_clip_score:
+                            text_summary = alternative_summary
+                            text_clip_score = alternative_score
 
+                if text_summary or image_desc:
                     processed_slides.append({
-                    'original_text': text or "",
-                    'image_description': image_desc,
-                    'image_clip_score': image_clip_score,
-                    'text_summary': text_summary,
-                    'text_clip_score': text_clip_score,
-                    'image_path': f"slide_{start_slide + i}.png"
-                })
+                        'original_text': text or "",
+                        'image_description': image_desc,
+                        'image_clip_score': image_clip_score,
+                        'text_summary': text_summary,
+                        'text_clip_score': text_clip_score,
+                        'image_path': f"slide_{start_slide + i}.png"
+                    })
+                    
+                print(f"Processed Slide {i}: {processed_slides[-1]}")
 
             # Aktualisiere Gesamtzusammenfassung mit CLIP-Scores
             comprehensive_summary = self._generate_comprehensive_summary(processed_slides)
@@ -356,7 +276,7 @@ class MultimodalSummarizer:
 
     def _generate_comprehensive_summary(self, processed_slides):
         """
-        Erstellt eine Gesamtzusammenfassung aller Folien, einschließlich hierarchischer Zusammenfassungen.
+        Erstellt eine Gesamtzusammenfassung aller Folien.
         """
         newline = os.linesep
         sections = [f"Zusammenfassung der Folien{newline}", "=" * 30 + newline]
@@ -442,10 +362,12 @@ class MultimodalSummarizer:
             cleaned_text = self.text_cleaner.clean_text(text)
             if not cleaned_text:
                 return None
+
             # Prüfe ob es sich um ein DummyImage handelt
             if isinstance(image, DummyImage):
                 # Wenn kein echtes Bild vorhanden, überspringe Flamingo
                 return self._generate_bart_summary(cleaned_text)
+
             # Bereite Bild vor
             image_tensor = self.flamingo_image_processor(image).unsqueeze(0).to(self.device)
             vision_x = image_tensor.unsqueeze(0).unsqueeze(0)  # [batch_size=1, num_media=1, C, H, W]
@@ -523,11 +445,6 @@ class MultimodalSummarizer:
         
         # Bewerte die Relevanz der Bilder
         relevant_images = self._filter_relevant_images(images)
-
-        # Wenn nur ein Bild vorhanden war und es als Logo eingestuft wurde,
-        # geben wir lieber kein Bild zurück
-        if len(images) == 1 and len(relevant_images) == 0:
-            return DummyImage(), self.text_cleaner.clean_text(text.strip())
         
         # Gib das relevanteste Bild zurück oder ein DummyImage
         representative_image = relevant_images[0] if relevant_images else DummyImage()
@@ -566,11 +483,6 @@ class MultimodalSummarizer:
         
         # Bewerte die Relevanz der Bilder
         relevant_images = self._filter_relevant_images(images)
-
-        # Wenn nur ein Bild vorhanden war und es als Logo eingestuft wurde,
-        # geben wir lieber kein Bild zurück
-        if len(images) == 1 and len(relevant_images) == 0:
-            return DummyImage(), self.text_cleaner.clean_text(text.strip())
         
         # Gib das relevanteste Bild zurück oder ein DummyImage
         representative_image = relevant_images[0] if relevant_images else DummyImage()
@@ -578,107 +490,21 @@ class MultimodalSummarizer:
 
     def _filter_relevant_images(self, images):
         """
-        Verbesserte Methode zur Bewertung und Filterung von Bildern basierend auf
-        mehreren Kriterien zur Erkennung von Logos und unwichtigen Bildern.
-        
-        Args:
-            images (List[PIL.Image]): Liste von PIL Image Objekten
-            
-        Returns:
-            List[PIL.Image]: Liste der als relevant eingestuften Bilder
+        Bewertet Bilder basierend auf Größe, Position und anderen Kriterien.
         """
-        if not images:
-            return []
-            
         relevant_images = []
-        max_image_area = 0
-        
-        # Erste Iteration zur Bestimmung der maximalen Bildgröße
-        for img in images:
-            width, height = img.size
-            area = width * height
-            max_image_area = max(max_image_area, area)
-        
-        for img in images:
-            try:
-                width, height = img.size
-                area = width * height
-                
-                # 1. Größenbasierte Filterung
-                if area < 10000:  # Mindestgröße in Pixeln
-                    continue
-                    
-                # Relativer Größenvergleich zum größten Bild
-                if area < max_image_area * 0.1:  # Weniger als 10% des größten Bildes
-                    continue
-                    
-                # 2. Seitenverhältnis-Prüfung
-                aspect_ratio = width / height
-                if not (0.25 <= aspect_ratio <= 4.0):  # Extreme Seitenverhältnisse ausschließen
-                    continue
-                    
-                # 3. Logo-Erkennung durch Farbanalyse
-                img_array = np.array(img.convert('RGB'))
-                
-                # Berechne Farb-Histogramm
-                color_variance = np.var(img_array, axis=(0,1)).mean()
-                if color_variance < 100:  # Geringe Farbvarianz deutet auf Logos hin
-                    continue
-                    
-                # 4. Transparenz-Prüfung falls RGBA
-                if img.mode == 'RGBA':
-                    alpha = np.array(img.split()[-1])
-                    transparent_ratio = (alpha < 128).mean()
-                    if transparent_ratio > 0.3:  # Mehr als 30% transparent
-                        continue
-                        
-                # 5. Kantenerkennung zur Komplexitätsbewertung
-                img_gray = np.array(img.convert('L'))
-                gradient_x = np.gradient(img_gray, axis=1)
-                gradient_y = np.gradient(img_gray, axis=0)
-                gradient_magnitude = np.sqrt(gradient_x**2 + gradient_y**2)
-                edge_density = (gradient_magnitude > 30).mean()
-                
-                if edge_density < 0.05:  # Zu wenige Kanten
-                    continue
-                    
-                # 6. Position im Originalbild (falls verfügbar)
-                if hasattr(img, 'getbbox'):
-                    bbox = img.getbbox()
-                    if bbox:
-                        x1, y1, x2, y2 = bbox
-                        # Ignoriere Bilder am äußersten Rand
-                        border_margin = 10
-                        if (x1 <= border_margin and y1 <= border_margin) or \
-                        (x2 >= width - border_margin and y2 >= height - border_margin):
-                            continue
-                
-                # 7. Texterkennung in Bildern (optional für Logos mit Text)
-                try:
-                    text = pytesseract.image_to_string(img)
-                    if text.strip():
-                        # Wenn Text gefunden wurde und das Bild klein ist,
-                        # ist es wahrscheinlich ein Logo
-                        if area < 50000 and len(text.split()) < 5:
-                            continue
-                except Exception as e:
-                    print(f"OCR-Fehler: {str(e)}")
-                
-                # Berechne einen Relevanz-Score
-                score = 0.0
-                score += min(1.0, area / 100000)  # Größe
-                score += min(1.0, edge_density * 5)  # Komplexität
-                score += min(1.0, color_variance / 1000)  # Farbvielfalt
-                
-                # Speichere Bild mit Score
-                relevant_images.append((img, score))
-                
-            except Exception as e:
-                print(f"Fehler bei der Bildanalyse: {str(e)}")
+        for image in images:
+            width, height = image.size
+            
+            # Ignoriere zu kleine Bilder (z. B. Logos)
+            if width * height < 5000:  # Schwellenwert anpassen
                 continue
+            
+            # Optionale weitere Kriterien hinzufügen, z. B. Position oder Ähnlichkeit zum Text
+            relevant_images.append(image)
         
-        # Sortiere nach Score und gebe nur die Bilder zurück
-        relevant_images.sort(key=lambda x: x[1], reverse=True)
-        return [img for img, _ in relevant_images]
+        # Sortiere nach Größe (größere Bilder sind oft relevanter)
+        relevant_images.sort(key=lambda img: img.size[0] * img.size[1], reverse=True)
+        return relevant_images
 
 summarizer = MultimodalSummarizer()
