@@ -243,12 +243,6 @@ class MultimodalSummarizer:
                     if flamingo_summary:
                         text_summary = self._generate_bart_summary(flamingo_summary)
                         text_clip_score = self.calculate_clip_similarity(image, text_summary)
-                    else:
-                        alternative_summary = self._generate_bart_summary(text)
-                        alternative_score = self.calculate_clip_similarity(image, alternative_summary)
-                        if alternative_score > text_clip_score:
-                            text_summary = alternative_summary
-                            text_clip_score = alternative_score
 
                 if text_summary or image_desc:
                     processed_slides.append({
@@ -388,7 +382,7 @@ class MultimodalSummarizer:
                 vision_x=vision_x,
                 lang_x=tokenizer_output.input_ids,
                 attention_mask=tokenizer_output.attention_mask,
-                max_new_tokens=150,
+                max_new_tokens=200,
                 do_sample=True,
                 num_beams=5,
                 no_repeat_ngram_size=3,
