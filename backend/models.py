@@ -109,44 +109,29 @@ class MultimodalSummarizer:
         self.MIN_TEXT_LENGTH = 10
         self.MAX_SUMMARY_LENGTH = 500
 
-    def _describe_image_with_blip(self, image):
+    def _describe_image_with_blip(self, image, text=None):
         try:
-            # Generiere mehrere Beschreibungen mit unterschiedlichen Parametern
-            descriptions = []
-            beam_sizes = [3, 5]
-            for beam_size in beam_sizes:
-                inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
-                outputs = self.blip_model.generate(
-                    **inputs,
-                    max_length=50,
-                    num_beams=beam_size,
-                    min_length=10,
-                    temperature=0.7,
-                    top_p=0.9
-                )
-                desc = self.blip_processor.decode(outputs[0], skip_special_tokens=True)
-                descriptions.append(desc)
-            
-            # Wähle die beste Beschreibung basierend auf Länge und Qualität
-            best_description = max(descriptions, key=lambda x: len(x.split()))
-            
-            # Übersetze und verbessere die Beschreibung
-            try:
-                translator = GoogleTranslator(source='en', target='de')
-                translated = translator.translate(best_description)
-                
-                # Verbessere die übersetzte Beschreibung
-                if not translated.startswith("Das Bild zeigt"):
-                    translated = f"Das Bild zeigt {translated[0].lower()}{translated[1:]}"
-                    
-                # Entferne redundante Formulierungen
-                translated = re.sub(r'man kann sehen,?\s+', '', translated, flags=re.IGNORECASE)
-                translated = re.sub(r'es ist zu sehen,?\s+', '', translated, flags=re.IGNORECASE)
-                
-                return translated
-            except Exception as e:
-                print(f"Übersetzungsfehler: {str(e)}")
-                return best_description
+            # Generiere Beschreibungen mit BLIP
+            inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
+            outputs = self.blip_model.generate(
+                **inputs,
+                max_length=50,
+                num_beams=5,
+                min_length=10,
+                temperature=0.7
+            )
+            description = self.blip_processor.decode(outputs[0], skip_special_tokens=True)
+
+            # Kombiniere mit Text, falls verfügbar
+            if text:
+                combined_input = f"{text} {description}"
+            else:
+                combined_input = description
+
+            # Übersetze Beschreibung
+            translator = GoogleTranslator(source='en', target='de')
+            translated_description = translator.translate(combined_input)
+            return translated_description
         except Exception as e:
             print(f"BLIP-Fehler: {str(e)}")
             return "Keine Beschreibung verfügbar"
@@ -232,7 +217,7 @@ class MultimodalSummarizer:
                 
                 # Verarbeite Bild, wenn vorhanden
                 if image:
-                    image_desc = self._describe_image_with_blip(image)
+                    image_desc = self._describe_image_with_blip(image, None)
                     print(f"BLIP-Beschreibung: {image_desc}")
                     if image_desc and image_desc != "Keine Beschreibung verfügbar":
                         image_clip_score = self.calculate_clip_similarity(image, image_desc)
@@ -352,6 +337,8 @@ class MultimodalSummarizer:
 
     def _process_with_flamingo(self, image, text):
         try:
+            # Generiere eine kontextualisierte Bildbeschreibung
+            blip_description = self._describe_image_with_blip(image, text)
             # Bereite Text vor
             cleaned_text = self.text_cleaner.clean_text(text)
             if not cleaned_text:
@@ -366,7 +353,7 @@ class MultimodalSummarizer:
             image_tensor = self.flamingo_image_processor(image).unsqueeze(0).to(self.device)
             vision_x = image_tensor.unsqueeze(0).unsqueeze(0)  # [batch_size=1, num_media=1, C, H, W]
 
-            prompt = f"{cleaned_text}"
+            prompt = f"{text} {blip_description}"
             
             # Tokenisiere den Text
             tokenizer_output = self.flamingo_tokenizer(
