@@ -353,7 +353,7 @@ class MultimodalSummarizer:
             image_tensor = self.flamingo_image_processor(image).unsqueeze(0).to(self.device)
             vision_x = image_tensor.unsqueeze(0).unsqueeze(0)  # [batch_size=1, num_media=1, C, H, W]
 
-            prompt = f"{text} {blip_description}"
+            prompt = f"{blip_description}"
             
             # Tokenisiere den Text
             tokenizer_output = self.flamingo_tokenizer(
