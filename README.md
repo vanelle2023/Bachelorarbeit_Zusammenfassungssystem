@@ -13,6 +13,7 @@ Dieses Projekt ist als Proof of Concept konzipiert, um die Leistungsfähigkeit d
 5. [Installation und Ausführung](#installation-und-ausführung)
 6. [API-Endpunkte](#api-endpunkte)
 7. [Frontend-Funktionen](#frontend-funktionen)
+8. [Evaluation](#evaluation)
 
 ---
 
@@ -62,6 +63,13 @@ Dieses System ermöglicht:
   -  settings.py # Konfigurationen
   -  uploads/ # Temporäre Uploads
   -  temp/ # Temporäre Dateien
+- 📁 evaluation
+  -  Evaluationsmetriken_Bachelorarbeit.ipynb 
+  -  evaluation_Bild_und_Text.txt # Ergebnis für den Testfall Bild und Text
+  -  evaluation_Folie_mit_mathFormeln.txt # Ergebnis für den Testfall Folie mit mathematischen Formeln
+  -  evaluation_komplexe_Bilder.txt # Ergebnis für den Testfall komplexe Bilder
+  -  evaluation_nur_Bild.txt # Ergebnis für den Testfall Nur Bild
+  -  evaluation_nur_Text.txt # Ergebnis für den Testfall Nur Text
 - 📁 frontend
   - 📁 components  # UI-Komponenten
   - 📁 pages   # Seiten (z. B. Home,Kontakt) 
@@ -162,3 +170,26 @@ Zeigt die generierten Zusammenfassungen und Bildbeschreibungen an.
 
 3. Interaktive Navigation:
 Benutzerfreundliches Interface mit React und Material-UI.
+
+## **Evaluation**
+
+### **Evaluationsziele**
+
+Das Ziel der Evaluation ist es, die Qualität der automatisch generierten Zusammenfassungen quantitativ zu bewerten und diese mit den Ergebnissen von ChatGPT zu vergleichen. Dies ermöglicht eine objektive Einschätzung der Leistungsfähigkeit des Systems im Vergleich zu einem etablierten Modell.
+
+### **Methodik**
+
+Für die Evaluation werden die folgenden Metriken verwendet:
+
+- **ROUGE (Recall-Oriented Understudy for Gisting Evaluation):**
+  Diese Metrik vergleicht die automatisch generierten Zusammenfassungen mit Referenzzusammenfassungen anhand von Überlappungen in n-Grammen, Wörtern und Wortsequenzen.
+
+- **METEOR (Metric for Evaluation of Translation with Explicit ORdering):**
+  Diese Metrik berücksichtigt Synonyme, Stammformen und Wortreihenfolgen, um die semantische Ähnlichkeit zwischen generierten und Referenzzusammenfassungen zu messen.
+
+### **Ergebnisse interpretieren**
+
+- **ROUGE** gibt Aufschluss darüber, wie gut die generierten Zusammenfassungen die wichtigsten Inhalte abdecken.
+- **METEOR** hilft dabei, die semantische Nähe zu bewerten, auch wenn unterschiedliche Formulierungen verwendet werden.
+
+Weitere Details zur Implementierung der Evaluationsmetriken können in der Datei `Evaluationsmetriken_Bachelorarbeit.ipynb` eingesehen werden.

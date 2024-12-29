@@ -1,0 +1,9 @@
+=== ROUGE Scores ===
+    Metric   ChatGPT  Your System
+0  ROUGE-1  0.416667     0.318841
+1  ROUGE-2  0.133333     0.095238
+2  ROUGE-L  0.291667     0.231884
+
+=== METEOR Scores ===
+ChatGPT METEOR: 0.3287
+System METEOR: 0.1744
