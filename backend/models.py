@@ -41,7 +41,7 @@ class TextCleaner:
 
     def clean_text(self, text):
         """
-        Weniger strenge Textbereinigung mit besserer Fehlerbehandlung
+        Textbereinigung mit Fehlerbehandlung
         """
         if not text:
             return None
@@ -52,12 +52,10 @@ class TextCleaner:
         # Entferne nur problematische Sonderzeichen
         cleaned = re.sub(r'[^\w\s.,!?():\-–\'"]/]', ' ', cleaned)
         
-        # Weniger strenge Wortfilterung
         words = cleaned.split()
         filtered_words = []
         
         for word in words:
-            # Überspringe nur offensichtlich ungültige Wörter
             if len(word) < 2 and not word.lower() in ['a', 'i', 'o', '&']:
                 continue
                 
