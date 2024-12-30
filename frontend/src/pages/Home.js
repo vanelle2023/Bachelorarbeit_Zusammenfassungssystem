@@ -25,17 +25,11 @@ const Home = () => {
             Herzlich willkommen bei SmartSummaries
           </Typography>
           <Typography variant="h5" sx={{ mb: 4 }}>
-            Deiner Plattform für intelligente und effiziente Zusammenfassungen von Vorlesungsfolien.
+            Eine Plattform entwickelt im Rahmen einer Bachelorarbeit zur automatischen Zusammenfassung von Veranstaltungsfolien.
           </Typography>
           <Typography variant="body1" sx={{ fontSize: '1.2rem', mb: 2 }}>
-            Egal, ob du Student oder Dozent bist, unsere Plattform hilft dir dabei, umfangreiche Vorlesungsfolien prägnant
-            zusammenzufassen. Unser Ziel ist es, das Lernen und Lehren zu erleichtern, indem wir die wichtigsten
-            Informationen aus Präsentationen extrahieren und übersichtlich aufbereiten.
-          </Typography>
-          <Typography variant="body1" sx={{ fontSize: '1.2rem' }}>
-            Erstelle auf einfache Weise Zusammenfassungen, die dir helfen, Inhalte schneller zu erfassen und zu verstehen.
-            Mit SmartSummaries erhältst du stets einen prägnanten Überblick, der dir hilft, den roten Faden nicht zu
-            verlieren.
+            SmartSummaries nutzt fortschrittliche multimodale neuronale Netze, um Texte und Bilder aus Vorlesungsfolien zu analysieren und prägnante Zusammenfassungen zu erstellen. 
+            Ziel ist es, den Lernprozess zu vereinfachen und die wichtigsten Informationen effizient bereitzustellen.
           </Typography>
         </Container>
       </Box>
@@ -49,9 +43,8 @@ const Home = () => {
           Was kann hier zusammengefasst werden?
         </Typography>
         <Typography variant="body1" sx={{lineHeight: '2'}}>
-          Mit SmartSummaries können Sie Vorlesungsfolien in den gängigen Formaten wie PDF und PowerPoint hochladen. 
-          Die Plattform ist darauf spezialisiert, Inhalte aus den Bereichen Softwaretechnik, Betriebssysteme und Rechnernetze zu verarbeiten. 
-          Unsere Systeme analysieren sowohl Text als auch visuelle Informationen, um Ihnen eine prägnante Zusammenfassung zu bieten.
+          Mit SmartSummaries können Sie Vorlesungsfolien im PDF- oder PowerPoint-Format hochladen. 
+          Die Plattform erstellt präzise Zusammenfassungen für jede einzelne Seite, basierend auf einer innovativen Kombination von Text- und Bildanalysen.
         </Typography>
       </Box>
       <Box sx={{
@@ -70,11 +63,10 @@ const Home = () => {
               1. Laden Sie Ihre Vorlesungsfolien in PDF- oder PowerPoint-Format hoch.
           </Typography>
           <Typography variant="body1" sx={{mb: 2, lineHeight: '2'}}>
-              2. Unsere Plattform analysiert die Folien und erstellt eine automatische Zusammenfassung, die sowohl Text als auch visuelle Elemente berücksichtigt.
+              2. Unsere Plattform analysiert die Folien mit Hilfe multimodaler neuronaler Netze und erstellt automatische Zusammenfassungen, die Text- und visuelle Inhalte integrieren.
           </Typography>
           <Typography variant="body1"sx={{mb: 2, lineHeight: '2'}}>
-              3. Sie erhalten die Zusammenfassung in Markdown-Format, die Sie direkt nutzen oder nach Ihren Wünschen bearbeiten können. 
-              Alle Zusammenfassungen können im PDF Format exportiert werden, um sie für spätere Zwecke zu verwenden.
+              3. Sie erhalten eine prägnante, textuelle Zusammenfassung, die einfach zu kopieren und weiterzuverwenden ist.
           </Typography>
           <Link to="/services" style={{ textDecoration: 'none' }}>
           <Button
