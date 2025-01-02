@@ -21,7 +21,6 @@ import io  # Für Bytes-Verarbeitung
 from settings import TEMP_DIR  # Nutzung von temporären Dateien
 
 class DummyImage:
-    """Eine Dummy-Klasse, die Flamingo-kompatibel ist"""
         
     def save(self, *args, **kwargs):
         pass  # Tue nichts, wenn save aufgerufen wird

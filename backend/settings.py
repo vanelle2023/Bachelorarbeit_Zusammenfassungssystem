@@ -9,13 +9,6 @@ TEMP_DIR = "temp"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# **Tesseract-OCR Konfiguration**
-# Pfad zur Tesseract-Installation (auf Windows-Systemen erforderlich)
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# Setzen des TESSDATA_PREFIX für Sprachdaten
-os.environ["TESSDATA_PREFIX"] = r"C:\Program Files\Tesseract-OCR\tessdata"
-
 # **Globale Konfigurationen**
 # Hier können weitere Konfigurationsoptionen hinzugefügt werden, z. B. Debug-Modus, Logging, etc.
 DEBUG_MODE = True  # Aktiviert Debugging (in der Produktion auf `False` setzen)
