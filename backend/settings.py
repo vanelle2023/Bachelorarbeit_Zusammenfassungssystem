@@ -1,5 +1,4 @@
 import os
-import pytesseract
 
 # **Verzeichnisse für das Speichern hochgeladener Dateien und temporärer Daten**
 UPLOAD_DIR = "uploads"
