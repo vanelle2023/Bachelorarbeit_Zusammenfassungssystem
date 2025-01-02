@@ -1,4 +1,4 @@
-# Multimodale Präsentations-Zusammenfassung
+# Multimodale Zusammenfassung
 
 Dieses Projekt ist als Proof of Concept konzipiert, um die Leistungsfähigkeit der CLIP- und Flamingo-Modelle im Bereich der multimodalen Verarbeitung zu evaluieren. Konkret wurde eine Plattform entwickelt, die PDF- und PowerPoint-Dateien analysiert und automatisch zusammenfasst. Die technische Umsetzung erfolgt durch eine moderne Zwei-Tier-Architektur, bestehend aus einem Backend mit FastAPI und einem Frontend in React.
 
@@ -64,7 +64,8 @@ Dieses System ermöglicht:
   -  uploads/ # Temporäre Uploads
   -  temp/ # Temporäre Dateien
 - 📁 evaluation
-  -  Evaluationsmetriken_Bachelorarbeit.ipynb 
+  -  Evaluationsmetriken_Bachelorarbeit.ipynb
+  -  Beispieldatensatz.pdf
   -  evaluation_Bild_und_Text.txt # Ergebnis für den Testfall Bild und Text
   -  evaluation_Folie_mit_mathFormeln.txt # Ergebnis für den Testfall Folie mit mathematischen Formeln
   -  evaluation_komplexe_Bilder.txt # Ergebnis für den Testfall komplexe Bilder
