@@ -7,7 +7,6 @@ from transformers import (
 from sentence_transformers import SentenceTransformer
 from open_flamingo import create_model_and_transforms
 from PIL import Image
-import pytesseract
 import spacy
 import re
 import clip
